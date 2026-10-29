@@ -20,6 +20,9 @@ choose your team under *Signing & Capabilities*, plug in the phone and press Run
 - Best photo: grains spread out, one plain background (any colour that differs from the grains), even light, taken from above.
 - Printed text, lines and symbols on the sheet or packet (labels, numbers, underlines, arrows, ticks, boxes, rulers)
   are recognised and **not counted**; the line under the count says how many pieces were ignored.
+- **Mixed grains** work: wheat, round seeds, lentils, beans... in one photo are each counted once (a big grain is
+  not split just because it is bigger than the others).
+- **Light reflections** (flash, lamp or window glare on a glossy white table) are ignored.
 - Blue ring = certain, **orange** = touching/overlapping group (check these), **green** = added by you.
 - Tap an empty spot to add a missed grain, tap a ring to remove one. **Undo** reverts. Pinch to zoom, drag to pan, **Fit** resets.
 - The yellow/green line under the count tells you if the photo is good enough for an exact count.

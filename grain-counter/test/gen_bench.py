@@ -230,21 +230,23 @@ def render(c):
     if c.get("cluster"):
         fx, fy, sx, sy = c["cluster"]
         cl = (W * fx, H * fy, W * sx, H * sy)
-    grain0 = GRAINS[c.get("grain", "lentil")]
-    prad = rad * max(grain0[0], grain0[1])          # placement radius = longest half-axis
+    mix = c.get("mix", ((c.get("grain", "lentil"), 1.0),))       # mixed grains: (kind, share) pairs
+    prad = rad * max(max(GRAINS[k][0], GRAINS[k][1]) for k, _ in mix)  # placement radius = longest half-axis
     pts = place(rng, c["n"], prad, c.get("min_f", 2.5), region, cl)
     if c.get("edges"):  # push some lentils close to the paper edge
         extra = place(rng, c["edges"], prad, 2.2, region, None)
         pts += [p for p in extra if all((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 > (2.2 * prad) ** 2 for q in pts)]
 
-    gA, gB, gP, gCol = GRAINS[c.get("grain", "lentil")]
-    base_col = np.array(gCol if gCol is not None else COLORS[c.get("dal", "orange")], np.float32) / 255.0
+    shares = np.array([f for _, f in mix], np.float64)
     M = np.zeros((H, W), np.float32)
     ids = np.full((H, W), -1, np.int32)
     areas, kinds = [], []
     for i, (px, py) in enumerate(pts):
+        gname = mix[int(rng.choice(len(mix), p=shares / shares.sum()))][0] if len(mix) > 1 else mix[0][0]
+        gA, gB, gP, gCol = GRAINS[gname]
+        base_col = np.array(gCol if gCol is not None else COLORS[c.get("dal", "orange")], np.float32) / 255.0
         a = rad * gA * rng.uniform(0.9, 1.1)
-        b = rad * gB * rng.uniform(0.9, 1.1) if c.get("grain", "lentil") != "lentil" else a * rng.uniform(0.85, 1.0)
+        b = rad * gB * rng.uniform(0.9, 1.1) if gname != "lentil" else a * rng.uniform(0.85, 1.0)
         th = rng.uniform(0, np.pi)
         r = rng.random()
         kind = "full"
@@ -276,6 +278,18 @@ def render(c):
         ids[y0:y1, x0:x1][own] = i
         areas.append(int(own.sum()))
         kinds.append(kind)
+
+    # ---- flash / lamp reflections on a glossy surface: bright, colourless, with sparkle (never counted)
+    for gx, gy, gr, gs in c.get("glare", ()):
+        d2 = ((xx - gx * W) ** 2 + (yy - gy * H) ** 2) / (gr * min(W, H)) ** 2
+        texture = blur(np.clip(rng.normal(0.5, 0.35, (H, W)), 0, 1), 3.0 * s) * 2 - 1     # orange-peel gloss
+        sparkle = (rng.random((H, W)) > 0.985).astype(np.float32)                           # glints
+        sparkle = blur(sparkle, 0.6 * s) * 3.0
+        env = np.exp(-d2 * 1.2)
+        texture /= max(1e-6, float(np.abs(texture).max()))
+        lift = gs * (np.exp(-d2 * 3.0) * 0.45 + env * 0.4 * (1 + 1.3 * texture) + env * sparkle * 0.6)
+        lift *= 1 - 0.85 * M                                                                # matte grains reflect much less
+        img = img + np.clip(lift, 0, None)[..., None] * (1.0 - img) * 1.4
 
     if c.get("shadow", 0) > 0:
         sh = np.roll(np.roll(M, int(4 * s), 0), int(5 * s), 1)
@@ -370,6 +384,16 @@ CASES = [
     ("W06_date_stamp", dict(n=120, min_f=2.6, paper=1.02, watermark="date")),
     ("W07_frame_sesame", dict(grain="sesame_black", n=200, min_f=2.4, watermark="frame")),
     ("W08_portrait_shot_on", dict(n=120, min_f=2.6, W=1449, H=2576, paper=1.02, watermark="shot_on_shadow")),
+    # ---- flash / lamp reflections and mixed grains (like real photos taken on a glossy white table)
+    ("R01_flash_glare", dict(n=110, min_f=2.6, paper=1.02, glare=((0.3, 0.55, 0.12, 0.9), (0.78, 0.3, 0.09, 0.8)))),
+    ("R02_glare_wheat", dict(grain="wheat", n=80, min_f=2.4, paper=1.02, glare=((0.25, 0.6, 0.13, 1.0), (0.75, 0.35, 0.1, 0.9)))),
+    ("R03_mixed", dict(mix=(("wheat", 0.55), ("pepper", 0.35), ("lentil", 0.1)), n=90, min_f=2.4, paper=1.02, dal="red")),
+    ("R04_mixed_glare", dict(mix=(("wheat", 0.6), ("pepper", 0.4)), n=60, min_f=2.4, paper=1.02,
+                             glare=((0.2, 0.3, 0.12, 1.0), (0.35, 0.62, 0.1, 1.0)), W=1449, H=2576, shade=0.12)),
+    ("R05_mixed_beans", dict(mix=(("chickpea", 0.3), ("mustard", 0.4), ("rajma", 0.3)), n=70, min_f=2.2)),
+    ("R06_mixed_rice_dal", dict(mix=(("lentil", 0.5), ("wheat", 0.5)), n=120, min_f=2.3, dal="yellow")),
+    ("R07_glare_dark_grains", dict(grain="sesame_black", n=180, min_f=2.4, paper=1.02, glare=((0.5, 0.5, 0.15, 1.0),))),
+    ("R08_mixed_touching", dict(mix=(("wheat", 0.5), ("pepper", 0.5)), n=120, min_f=1.9, cluster=(0.5, 0.5, 0.2, 0.22))),
 ]
 
 if __name__ == "__main__":

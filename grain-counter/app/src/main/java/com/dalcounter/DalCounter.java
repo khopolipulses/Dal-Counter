@@ -123,7 +123,7 @@ public final class DalCounter {
         }
 
         // Printed text, lines and symbols on the sheet are not grains: drop them before measuring grains.
-        res.ignoredCount = removeMarks(argb, open, mask, lab, nLab, area, w, h, s);
+        res.ignoredCount = removeMarks(argb, seg.score, open, mask, lab, nLab, area, w, h, s);
 
         // Typical single-lentil area = median of the components that are not tiny crumbs.
         double[] all = filterAbove(Arrays.copyOfRange(area, 1, nLab + 1), 0);
@@ -225,12 +225,19 @@ public final class DalCounter {
         }
 
         // Cluster correction: a blob clearly bigger than one grain hides more grains than the neck test saw.
+        // Not when its outline is smooth and convex: that is one big grain (wheat among small seeds, a bean among
+        // mustard), since touching grains always leave notches in the outline.
         int[] nPk = new int[nLab + 1];
         for (float[] q : pts) nPk[(int) q[2]]++;
+        boolean[] big = new boolean[nLab + 1];
+        for (int l = 1; l <= nLab; l++) {
+            big[l] = nPk[l] > 0 && (Math.floor(area[l] / med + CLUSTER_ROUNDING) > nPk[l] || (nPk[l] == 1 && area[l] / med > 1.45));
+        }
+        boolean[] single = convexBlobs(lab, w, h, nLab, area, big);
         int[] need = new int[nLab + 1];
         int needTotal = 0;
         for (int l = 1; l <= nLab; l++) {
-            if (nPk[l] == 0) continue;
+            if (nPk[l] == 0 || single[l]) continue;
             int expect = (int) Math.floor(area[l] / med + CLUSTER_ROUNDING);
             if (expect > nPk[l]) {
                 need[l] = expect;
@@ -313,7 +320,7 @@ public final class DalCounter {
             int l = (int) q[2];
             double ratio = area[l] / med;
             int k = finalPk[l];
-            boolean unc = q[3] > 0 || (k >= 2 && ratio < 0.85 * k) || (k == 1 && ratio > 1.45);
+            boolean unc = q[3] > 0 || (k >= 2 && ratio < 0.85 * k) || (k == 1 && ratio > 1.45 && !single[l]);
             q[3] = unc ? 1 : 0;
         }
         sortReadingOrder(pts, 50f * s);
@@ -333,6 +340,92 @@ public final class DalCounter {
         return res;
     }
 
+    /** Blobs at least this convex (area / convex hull area) are one grain, however big. */
+    public static float SINGLE_SOLIDITY = 0.9f;
+
+    /** For the blobs marked in `check`: true when the blob is convex enough to be a single grain. */
+    private static boolean[] convexBlobs(int[] lab, int w, int h, int nLab, double[] area, boolean[] check) {
+        boolean[] single = new boolean[nLab + 1];
+        int[] minY = new int[nLab + 1], maxY = new int[nLab + 1];
+        Arrays.fill(minY, Integer.MAX_VALUE);
+        Arrays.fill(maxY, -1);
+        boolean any = false;
+        for (int l = 1; l <= nLab; l++) any |= check[l];
+        if (!any) return single;
+        for (int i = 0; i < w * h; i++) {
+            int l = lab[i];
+            if (l > 0 && check[l]) {
+                int y = i / w;
+                if (y < minY[l]) minY[l] = y;
+                if (y > maxY[l]) maxY[l] = y;
+            }
+        }
+        // Row extents of every checked blob, then the convex hull of the pixel corners.
+        int[][] rowMin = new int[nLab + 1][], rowMax = new int[nLab + 1][];
+        for (int l = 1; l <= nLab; l++) {
+            if (!check[l] || maxY[l] < 0) continue;
+            rowMin[l] = new int[maxY[l] - minY[l] + 1];
+            rowMax[l] = new int[maxY[l] - minY[l] + 1];
+            Arrays.fill(rowMin[l], Integer.MAX_VALUE);
+            Arrays.fill(rowMax[l], -1);
+        }
+        for (int i = 0; i < w * h; i++) {
+            int l = lab[i];
+            if (l == 0 || rowMin[l] == null) continue;
+            int x = i % w, r = i / w - minY[l];
+            if (x < rowMin[l][r]) rowMin[l][r] = x;
+            if (x > rowMax[l][r]) rowMax[l][r] = x;
+        }
+        for (int l = 1; l <= nLab; l++) {
+            if (rowMin[l] == null) continue;
+            int rows = rowMin[l].length;
+            long[] px = new long[rows * 4];
+            int np = 0;
+            for (int r = 0; r < rows; r++) {
+                if (rowMax[l][r] < 0) continue;
+                int y = minY[l] + r;
+                px[np++] = pack(rowMin[l][r], y);
+                px[np++] = pack(rowMin[l][r], y + 1);
+                px[np++] = pack(rowMax[l][r] + 1, y);
+                px[np++] = pack(rowMax[l][r] + 1, y + 1);
+            }
+            double hull = hullArea(Arrays.copyOf(px, np));
+            single[l] = hull > 0 && area[l] / hull >= SINGLE_SOLIDITY;
+        }
+        return single;
+    }
+
+    private static long pack(int x, int y) {
+        return ((long) x << 32) | (y & 0xffffffffL);
+    }
+
+    /** Area of the convex hull of points packed as (x << 32 | y), x and y >= 0 (Andrew's monotone chain). */
+    private static double hullArea(long[] p) {
+        Arrays.sort(p); // by x, then y
+        int n = p.length;
+        if (n < 3) return 0;
+        long[] hull = new long[2 * n];
+        int k = 0;
+        for (int i = 0; i < n; i++) {
+            while (k >= 2 && cross(hull[k - 2], hull[k - 1], p[i]) <= 0) k--;
+            hull[k++] = p[i];
+        }
+        for (int i = n - 2, t = k + 1; i >= 0; i--) {
+            while (k >= t && cross(hull[k - 2], hull[k - 1], p[i]) <= 0) k--;
+            hull[k++] = p[i];
+        }
+        double a = 0;
+        for (int i = 0; i < k - 1; i++) {
+            a += (double) (hull[i] >> 32) * (int) hull[i + 1] - (double) (hull[i + 1] >> 32) * (int) hull[i];
+        }
+        return Math.abs(a) / 2;
+    }
+
+    private static long cross(long o, long a, long b) {
+        long ox = o >> 32, oy = (int) o, ax = a >> 32, ay = (int) a, bx = b >> 32, by = (int) b;
+        return (ax - ox) * (by - oy) - (ay - oy) * (bx - ox);
+    }
+
     // ---------------------------------------------------------------- printed text and symbols
 
     /** A mark's strokes are at most this fraction of the typical grain thickness. */
@@ -343,6 +436,8 @@ public final class DalCounter {
     public static float MARK_HOLE = 0.2f;
     /** Thin specks smaller than this fraction of a grain are bits of print or dust (broken grains are bigger). */
     public static float MARK_SPECK = 0.1f;
+    /** ...and the inside of that hole looks like the background (difference score below this). */
+    public static float MARK_HOLE_EMPTY = 0.2f;
 
     /**
      * Finds printed text, lines and symbols (letters, digits, underlines, arrows, ticks, boxes, rulers...) and
@@ -351,18 +446,21 @@ public final class DalCounter {
      * a mark (the rest of a word, i dots, full stops, hyphens) go with it.
      * Returns the number of pieces removed; their area is set to 0.
      */
-    private static int removeMarks(int[] argb, boolean[] open, boolean[] mask, int[] lab, int nLab, double[] area,
-                                   int w, int h, float s) {
+    private static int removeMarks(int[] argb, float[] score, boolean[] open, boolean[] mask, int[] lab, int nLab,
+                                   double[] area, int w, int h, float s) {
         final int n = w * h;
         // Half-thickness of every piece, measured with its holes still open (an "o" is a thin ring, not a disc).
         double[] du = edt(open, w, h);
         double[] thick = new double[nLab + 1];
         double[] inkArea = new double[nLab + 1];
+        double[] holeScore = new double[nLab + 1];
         for (int i = 0; i < n; i++) {
             int l = lab[i];
             if (l > 0 && open[i]) {
                 inkArea[l]++;
                 if (du[i] > thick[l]) thick[l] = du[i];
+            } else if (l > 0) {
+                holeScore[l] += score[i];
             }
         }
         // Typical grain half-thickness: upper quartile of the pieces that are not crumbs, so that a page
@@ -388,8 +486,12 @@ public final class DalCounter {
             if (!thin[l]) continue;
             double stroke = inkArea[l] / (Math.PI * thick[l] * thick[l]);
             double hole = 1 - inkArea[l] / area[l];
-            sure[l] = stroke > MARK_STROKE || hole > MARK_HOLE || thick[l] <= hairline;
-            if (sure[l] || area[l] < MARK_SPECK * grainArea) {
+            // A printed ring (o, e, 0, a drawn circle) has plain background inside; a grain with a light centre does not.
+            boolean emptyHole = hole > 0 && holeScore[l] / (area[l] - inkArea[l]) < MARK_HOLE_EMPTY;
+            sure[l] = stroke > MARK_STROKE || (hole > MARK_HOLE && emptyHole) || thick[l] <= hairline;
+            // Tiny and nearly as thin as a hairline: a bit of print or dust (tiny seeds like mustard are thicker).
+            boolean speck = area[l] < MARK_SPECK * grainArea && thick[l] <= 1.5 * hairline;
+            if (sure[l] || speck) {
                 mark[l] = true;
                 marks++;
             }
@@ -535,6 +637,7 @@ public final class DalCounter {
 
     private static final class Seg {
         boolean[] fg;          // grains: anything on the sheet that differs enough from the background
+        float[] score;         // how different from the background each pixel is
         boolean paperFound;    // a clear plain background was found
         float paperLum;        // typical background brightness (0..255)
         float contrast;        // how strongly grains stand out (1 = clearly, <0.25 = hard to see)
@@ -551,6 +654,33 @@ public final class DalCounter {
     private static final float LOW_CONTRAST_SMOOTHING = 0.35f;
     private static final float CHROMA_SCALE = 0.25f;  // chromaticity distance that counts as "fully different"
     private static final float LUM_SCALE = 0.8f;       // relative brightness change that counts as "fully different"
+    private static final float FAINT_LEVEL = 0.25f;    // difference score that still makes a separate faint grain
+    private static final float LIGHT_SHEET = 150f;     // background brightness from which reflections are ignored
+    private static final float GLARE_LEVEL = 0.035f;   // mean extra brightness over a wide patch that marks a reflection
+
+    /**
+     * How much brighter than the sheet each part of the photo is, averaged over patches several grains wide
+     * (on the coarse background grid). A bright grain is small and averages away; a reflection does not.
+     */
+    private static float[] glareMap(int[] argb, int w, int h, Grid g) {
+        int gw = g.gw, gh = g.gh, blk = g.blk;
+        double[] excess = new double[gw * gh], cnt = new double[gw * gh];
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int p = argb[y * w + x];
+                float lum = 0.299f * ((p >> 16) & 255) + 0.587f * ((p >> 8) & 255) + 0.114f * (p & 255);
+                float ratio = lum / Math.max(8f, sample(g.lum, gw, gh, blk, x, y));
+                int cell = (y / blk) * gw + (x / blk);
+                excess[cell] += Math.max(0f, ratio - 1f);
+                cnt[cell] += 1;
+            }
+        }
+        int r = Math.max(2, Math.round(Math.max(w, h) / 1280f * 6)); // ~24 px at 1280 px
+        double[] be = boxBlur(excess, gw, gh, r), bc = boxBlur(cnt, gw, gh, r);
+        float[] out = new float[gw * gh];
+        for (int i = 0; i < out.length; i++) out[i] = bc[i] > 0 ? (float) (be[i] / bc[i]) : 0f;
+        return out;
+    }
 
     /**
      * Learns what the plain background looks like in each part of the photo and scores every pixel by how
@@ -609,6 +739,9 @@ public final class DalCounter {
         Grid g2 = buildGrid(argb, w, h, g1, (float) cr, (float) cg, out.paperLum);
 
         // 3. Difference score for every pixel (0 = looks like background, 1 = clearly something else).
+        //    Reflections (flash, lamp, window on a glossy table) are wide patches brighter than the sheet; inside
+        //    them being brighter does not count, only colour does (grains there are still darker or coloured).
+        float[] glare = out.paperLum >= LIGHT_SHEET ? glareMap(argb, w, h, g2) : null;
         float[] score = new float[n];
         float[] ratioArr = new float[n];
         for (int y = 0; y < h; y++) {
@@ -619,7 +752,8 @@ public final class DalCounter {
                 float lum = 0.299f * r + 0.587f * g + 0.114f * b;
                 float fl = Math.max(8f, sample(g2.lum, g2.gw, g2.gh, g2.blk, x, y));
                 float ratio = lum / fl;
-                float dev = Math.min(2f, Math.abs(ratio - 1f)) / LUM_SCALE;
+                boolean reflection = ratio > 1f && glare != null && sample(glare, g2.gw, g2.gh, g2.blk, x, y) > GLARE_LEVEL;
+                float dev = reflection ? 0f : Math.min(2f, Math.abs(ratio - 1f)) / LUM_SCALE;
                 float dc = 0;
                 int sum = r + g + b;
                 if (sum >= 45) {
@@ -718,8 +852,27 @@ public final class DalCounter {
                 noise = sc2 > 0 ? (float) Math.sqrt(sq2 / sc2) : noise;
                 continue;
             }
+            out.score = score;
             final float thr = Math.min(0.6f, Math.max(tauLo, 0.5f * out.contrast));
             for (int i = 0; i < n; i++) out.fg[i] = hull[i] && score[i] > thr;
+
+            // Mixed grains: a pale kind next to a dark kind (chickpeas with rajma) may reach the threshold set by
+            // the dark ones only at its rim, or not at all. A faint object that is mostly below the threshold is
+            // kept whole at a lower level; objects that are mostly strong keep their sharp edge (touching grains).
+            final float low = Math.max(tauLo, FAINT_LEVEL);
+            if (low < thr) {
+                boolean[] faint = new boolean[n];
+                for (int i = 0; i < n; i++) faint[i] = hull[i] && score[i] > low;
+                int[] fl = new int[n];
+                int nf = label(faint, w, h, fl);
+                int[] strong = new int[nf + 1], all = new int[nf + 1];
+                for (int i = 0; i < n; i++) {
+                    if (fl[i] == 0) continue;
+                    all[fl[i]]++;
+                    if (out.fg[i]) strong[fl[i]]++;
+                }
+                for (int i = 0; i < n; i++) if (fl[i] > 0 && strong[fl[i]] < 0.5 * all[fl[i]]) out.fg[i] = true;
+            }
             break;
         }
         return out;

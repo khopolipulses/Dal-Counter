@@ -119,7 +119,7 @@ public enum DalCounter {
         }
 
         // Printed text, lines and symbols on the sheet are not grains: drop them before measuring grains.
-        res.ignoredCount = removeMarks(argb, opened, &mask, &lab, nLab, &area, w, h, s)
+        res.ignoredCount = removeMarks(argb, seg.score, opened, &mask, &lab, nLab, &area, w, h, s)
 
         // Typical single-grain area = median of the components that are not tiny crumbs.
         let all = area[1...nLab].filter { $0 > 0 }
@@ -214,11 +214,19 @@ public enum DalCounter {
         }
 
         // Cluster correction: a blob clearly bigger than one grain hides more grains than the neck test saw.
+        // Not when its outline is smooth and convex: that is one big grain (wheat among small seeds, a bean among
+        // mustard), since touching grains always leave notches in the outline.
         var nPk = [Int](repeating: 0, count: nLab + 1)
         for q in pts { nPk[q.label] += 1 }
+        var big = [Bool](repeating: false, count: nLab + 1)
+        for l in 1...nLab {
+            big[l] = nPk[l] > 0 && ((area[l] / med + Double(clusterRounding)).rounded(.down) > Double(nPk[l])
+                || (nPk[l] == 1 && area[l] / med > 1.45))
+        }
+        let single = convexBlobs(lab, w, h, nLab, area, big)
         var need = [Int](repeating: 0, count: nLab + 1)
         var needTotal = 0
-        for l in 1...nLab where nPk[l] > 0 {
+        for l in 1...nLab where nPk[l] > 0 && !single[l] {
             let expect = Int((area[l] / med + Double(clusterRounding)).rounded(.down))
             if expect > nPk[l] {
                 need[l] = expect
@@ -304,7 +312,7 @@ public enum DalCounter {
             let l = pts[qi].label
             let ratio = area[l] / med
             let k = finalPk[l]
-            pts[qi].uncertain = pts[qi].uncertain || (k >= 2 && ratio < 0.85 * Double(k)) || (k == 1 && ratio > 1.45)
+            pts[qi].uncertain = pts[qi].uncertain || (k >= 2 && ratio < 0.85 * Double(k)) || (k == 1 && ratio > 1.45 && !single[l])
         }
         let band = max(1, 50 * s)
         pts = stableSorted(pts) { p, q in
@@ -319,6 +327,77 @@ public enum DalCounter {
         return res
     }
 
+    /// Blobs at least this convex (area / convex hull area) are one grain, however big.
+    public static let singleSolidity: Float = 0.9
+
+    /// For the blobs marked in `check`: true when the blob is convex enough to be a single grain.
+    private static func convexBlobs(_ lab: [Int32], _ w: Int, _ h: Int, _ nLab: Int, _ area: [Double],
+                                    _ check: [Bool]) -> [Bool] {
+        var single = [Bool](repeating: false, count: nLab + 1)
+        if !check.contains(true) { return single }
+        var minY = [Int](repeating: Int.max, count: nLab + 1), maxY = [Int](repeating: -1, count: nLab + 1)
+        for i in 0..<(w * h) {
+            let l = Int(lab[i])
+            if l > 0 && check[l] {
+                let y = i / w
+                if y < minY[l] { minY[l] = y }
+                if y > maxY[l] { maxY[l] = y }
+            }
+        }
+        // Row extents of every checked blob, then the convex hull of the pixel corners.
+        var rowMin = [[Int]](repeating: [], count: nLab + 1), rowMax = rowMin
+        for l in 1...nLab where check[l] && maxY[l] >= 0 {
+            rowMin[l] = [Int](repeating: Int.max, count: maxY[l] - minY[l] + 1)
+            rowMax[l] = [Int](repeating: -1, count: maxY[l] - minY[l] + 1)
+        }
+        for i in 0..<(w * h) {
+            let l = Int(lab[i])
+            if l == 0 || rowMin[l].isEmpty { continue }
+            let x = i % w, r = i / w - minY[l]
+            if x < rowMin[l][r] { rowMin[l][r] = x }
+            if x > rowMax[l][r] { rowMax[l][r] = x }
+        }
+        for l in 1...nLab where !rowMin[l].isEmpty {
+            var pts: [(Int, Int)] = []
+            for r in 0..<rowMin[l].count where rowMax[l][r] >= 0 {
+                let y = minY[l] + r
+                pts.append((rowMin[l][r], y))
+                pts.append((rowMin[l][r], y + 1))
+                pts.append((rowMax[l][r] + 1, y))
+                pts.append((rowMax[l][r] + 1, y + 1))
+            }
+            let hull = hullArea(pts)
+            single[l] = hull > 0 && area[l] / hull >= Double(singleSolidity)
+        }
+        return single
+    }
+
+    /// Area of the convex hull of integer points (Andrew's monotone chain).
+    private static func hullArea(_ points: [(Int, Int)]) -> Double {
+        let p = points.sorted { $0.0 != $1.0 ? $0.0 < $1.0 : $0.1 < $1.1 }
+        let n = p.count
+        if n < 3 { return 0 }
+        func cross(_ o: (Int, Int), _ a: (Int, Int), _ b: (Int, Int)) -> Int {
+            return (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+        }
+        var hull: [(Int, Int)] = []
+        hull.reserveCapacity(2 * n)
+        for i in 0..<n {
+            while hull.count >= 2 && cross(hull[hull.count - 2], hull[hull.count - 1], p[i]) <= 0 { hull.removeLast() }
+            hull.append(p[i])
+        }
+        let t = hull.count + 1
+        for i in stride(from: n - 2, through: 0, by: -1) {
+            while hull.count >= t && cross(hull[hull.count - 2], hull[hull.count - 1], p[i]) <= 0 { hull.removeLast() }
+            hull.append(p[i])
+        }
+        var a = 0.0
+        for i in 0..<(hull.count - 1) {
+            a += Double(hull[i].0) * Double(hull[i + 1].1) - Double(hull[i + 1].0) * Double(hull[i].1)
+        }
+        return abs(a) / 2
+    }
+
     // ---------------------------------------------------------------- printed text and symbols
 
     /// A mark's strokes are at most this fraction of the typical grain thickness.
@@ -327,6 +406,8 @@ public enum DalCounter {
     public static let markStroke: Float = 5
     /// Thin pieces with at least this much enclosed hole are letters like o, e, 0, 8 or drawn circles.
     public static let markHole: Float = 0.2
+    /// ...and the inside of that hole looks like the background (difference score below this).
+    public static let markHoleEmpty: Float = 0.2
     /// Thin specks smaller than this fraction of a grain are bits of print or dust (broken grains are bigger).
     public static let markSpeck: Float = 0.1
 
@@ -337,18 +418,22 @@ public enum DalCounter {
      * a mark (the rest of a word, i dots, full stops, hyphens) go with it.
      * Returns the number of pieces removed; their area is set to 0.
      */
-    private static func removeMarks(_ argb: [UInt32], _ open: [Bool], _ mask: inout [Bool], _ lab: inout [Int32],
-                                    _ nLab: Int, _ area: inout [Double], _ w: Int, _ h: Int, _ s: Float) -> Int {
+    private static func removeMarks(_ argb: [UInt32], _ score: [Float], _ open: [Bool], _ mask: inout [Bool],
+                                    _ lab: inout [Int32], _ nLab: Int, _ area: inout [Double],
+                                    _ w: Int, _ h: Int, _ s: Float) -> Int {
         let n = w * h
         // Half-thickness of every piece, measured with its holes still open (an "o" is a thin ring, not a disc).
         let du = edt(open, w, h)
         var thick = [Double](repeating: 0, count: nLab + 1)
         var inkArea = [Double](repeating: 0, count: nLab + 1)
+        var holeScore = [Double](repeating: 0, count: nLab + 1)
         for i in 0..<n {
             let l = Int(lab[i])
             if l > 0 && open[i] {
                 inkArea[l] += 1
                 if du[i] > thick[l] { thick[l] = du[i] }
+            } else if l > 0 {
+                holeScore[l] += Double(score[i])
             }
         }
         // Typical grain half-thickness: upper quartile of the pieces that are not crumbs, so that a page
@@ -373,8 +458,12 @@ public enum DalCounter {
             if !thin[l] { continue }
             let stroke = inkArea[l] / (Double.pi * thick[l] * thick[l])
             let hole = 1 - inkArea[l] / area[l]
-            sure[l] = stroke > Double(markStroke) || hole > Double(markHole) || thick[l] <= hairline
-            if sure[l] || area[l] < Double(markSpeck) * grainArea {
+            // A printed ring (o, e, 0, a drawn circle) has plain background inside; a grain with a light centre does not.
+            let emptyHole = hole > 0 && holeScore[l] / (area[l] - inkArea[l]) < Double(markHoleEmpty)
+            sure[l] = stroke > Double(markStroke) || (hole > Double(markHole) && emptyHole) || thick[l] <= hairline
+            // Tiny and nearly as thin as a hairline: a bit of print or dust (tiny seeds like mustard are thicker).
+            let speck = area[l] < Double(markSpeck) * grainArea && thick[l] <= 1.5 * hairline
+            if sure[l] || speck {
                 mark[l] = true
                 marks += 1
             }
@@ -530,6 +619,7 @@ public enum DalCounter {
 
     private struct Seg {
         var fg: [Bool]           // grains: anything on the sheet that differs enough from the background
+        var score: [Float] = []  // how different from the background each pixel is
         var paperFound = false   // a clear plain background was found
         var paperLum: Float = 0  // typical background brightness (0..255)
         var contrast: Float = 0  // how strongly grains stand out (1 = clearly, <0.25 = hard to see)
@@ -546,6 +636,33 @@ public enum DalCounter {
     private static let lowContrastSmoothing: Float = 0.35
     private static let chromaScale: Float = 0.25  // chromaticity distance that counts as "fully different"
     private static let lumScale: Float = 0.8      // relative brightness change that counts as "fully different"
+    private static let faintLevel: Float = 0.25   // difference score that still makes a separate faint grain
+    private static let lightSheet: Float = 150    // background brightness from which reflections are ignored
+    private static let glareLevel: Float = 0.035  // mean extra brightness over a wide patch that marks a reflection
+
+    /**
+     * How much brighter than the sheet each part of the photo is, averaged over patches several grains wide
+     * (on the coarse background grid). A bright grain is small and averages away; a reflection does not.
+     */
+    private static func glareMap(_ argb: [UInt32], _ w: Int, _ h: Int, _ g: Grid) -> [Float] {
+        let gw = g.gw, gh = g.gh, blk = g.blk
+        var excess = [Double](repeating: 0, count: gw * gh), cnt = excess
+        for y in 0..<h {
+            for x in 0..<w {
+                let (r, gg, b) = rgb(argb[y * w + x])
+                let lum: Float = 0.299 * Float(r) + 0.587 * Float(gg) + 0.114 * Float(b)
+                let ratio = lum / max(8, sample(g.lum, gw, gh, blk, x, y))
+                let cell = (y / blk) * gw + (x / blk)
+                excess[cell] += Double(max(0, ratio - 1))
+                cnt[cell] += 1
+            }
+        }
+        let r = max(2, javaRound(Float(max(w, h)) / 1280 * 6)) // ~24 px at 1280 px
+        let be = boxBlur(excess, gw, gh, r), bc = boxBlur(cnt, gw, gh, r)
+        var out = [Float](repeating: 0, count: gw * gh)
+        for i in 0..<out.count { out[i] = bc[i] > 0 ? Float(be[i] / bc[i]) : 0 }
+        return out
+    }
 
     @inline(__always) private static func rgb(_ p: UInt32) -> (Int, Int, Int) {
         return (Int((p >> 16) & 255), Int((p >> 8) & 255), Int(p & 255))
@@ -608,6 +725,9 @@ public enum DalCounter {
         let g2 = buildGrid(argb, w, h, g1, Float(cr), Float(cg), out.paperLum)
 
         // 3. Difference score for every pixel (0 = looks like background, 1 = clearly something else).
+        //    Reflections (flash, lamp, window on a glossy table) are wide patches brighter than the sheet; inside
+        //    them being brighter does not count, only colour does (grains there are still darker or coloured).
+        let glare: [Float]? = out.paperLum >= lightSheet ? glareMap(argb, w, h, g2) : nil
         var score = [Float](repeating: 0, count: n)
         var ratioArr = [Float](repeating: 0, count: n)
         for y in 0..<h {
@@ -617,7 +737,9 @@ public enum DalCounter {
                 let lum: Float = 0.299 * Float(r) + 0.587 * Float(g) + 0.114 * Float(b)
                 let fl = max(8, sample(g2.lum, g2.gw, g2.gh, g2.blk, x, y))
                 let ratio = lum / fl
-                let dev = min(2, abs(ratio - 1)) / lumScale
+                var reflection = false
+                if ratio > 1, let gm = glare { reflection = sample(gm, g2.gw, g2.gh, g2.blk, x, y) > glareLevel }
+                let dev = reflection ? 0 : min(2, abs(ratio - 1)) / lumScale
                 var dc: Float = 0
                 let sum = r + g + b
                 if sum >= 45 {
@@ -710,8 +832,28 @@ public enum DalCounter {
                 noise = sc2 > 0 ? Float((sq2 / Double(sc2)).squareRoot()) : noise
                 continue
             }
+            out.score = score
             let thr = min(0.6, max(tauLo, 0.5 * out.contrast))
             for i in 0..<n { out.fg[i] = hull[i] && score[i] > thr }
+
+            // Mixed grains: a pale kind next to a dark kind (chickpeas with rajma) may reach the threshold set by
+            // the dark ones only at its rim, or not at all. A faint object that is mostly below the threshold is
+            // kept whole at a lower level; objects that are mostly strong keep their sharp edge (touching grains).
+            let low = max(tauLo, faintLevel)
+            if low < thr {
+                var faint = [Bool](repeating: false, count: n)
+                for i in 0..<n { faint[i] = hull[i] && score[i] > low }
+                var fl = [Int32](repeating: 0, count: n)
+                let nf = label(faint, w, h, &fl)
+                var strong = [Int](repeating: 0, count: nf + 1), all = strong
+                for i in 0..<n where fl[i] > 0 {
+                    all[Int(fl[i])] += 1
+                    if out.fg[i] { strong[Int(fl[i])] += 1 }
+                }
+                for i in 0..<n where fl[i] > 0 && Double(strong[Int(fl[i])]) < 0.5 * Double(all[Int(fl[i])]) {
+                    out.fg[i] = true
+                }
+            }
             break
         }
         return out

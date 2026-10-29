@@ -18,6 +18,9 @@ The only permission is the camera (asked the first time you press **Camera**).
   are recognised and **not counted**; the line under the count says how many pieces were ignored.
   Phone camera watermarks in gallery photos ("Shot on Redmi ...", "AI QUAD CAMERA", phone model + lens frame,
   date stamps, small brand logos) are ignored the same way.
+- **Mixed grains** work: wheat, round seeds, lentils, beans... in one photo are each counted once (a big grain is
+  not split just because it is bigger than the others).
+- **Light reflections** (flash, lamp or window glare on a glossy white table) are ignored.
 - Blue ring = certain, **orange** = touching/overlapping group (check these), **green** = added by you.
 - Tap an empty spot to add a missed grain, tap a ring to remove one. **Undo** reverts.
 - The yellow/green line under the count tells you if the photo is good enough for an exact count.
@@ -30,6 +33,7 @@ The engine learns the background and grain colour from each photo, so it works f
 ## Limits
 - Grains piled on top of each other cannot be seen; they are flagged orange for you to check.
 - Pale grains on a white background (low contrast) are flagged as unreliable.
+- Reflections are ignored on light backgrounds only; on a dark tray, avoid flash glare (it looks like a white grain).
 - A grain lying right under watermark letters may be missed or split; use the in-app **Camera** to avoid watermarks.
 - Large **solid** printed shapes (a filled logo or a big bold headline) can still be counted as grains; a grain
   lying on top of a printed line is counted correctly. Plain paper is still the safest background.

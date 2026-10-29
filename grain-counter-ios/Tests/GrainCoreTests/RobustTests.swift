@@ -94,4 +94,71 @@ final class RobustTests: XCTestCase {
         XCTAssertGreaterThan(r.ignoredCount, 0)
         XCTAssertNotNil(r.ignoredNote)
     }
+
+    /// A wide, grainy flash reflection on a white sheet is not counted; grains inside it still are.
+    func testReflectionsAreIgnored() {
+        let w = 1280, h = 960
+        var gen = SplitMix(seed: 7)
+        var a = [UInt32](repeating: 0, count: w * h)
+        for y in 0..<h {
+            for x in 0..<w {
+                let d2 = Double((x - 400) * (x - 400) + (y - 480) * (y - 480)) / (170.0 * 170.0)
+                let glow = exp(-d2 * 1.2) * (0.35 + 0.65 * gen.unit())       // mottled, like a glossy table
+                let v = min(255, Int(200 + 70 * glow))
+                a[y * w + x] = rgb(v, v, v + 2)
+            }
+        }
+        var grains = 0
+        for row in 0..<4 {
+            for col in 0..<6 {
+                let cx = 150 + col * 200, cy = 140 + row * 230
+                for y in (cy - 22)...(cy + 22) {
+                    for x in (cx - 22)...(cx + 22) where (x - cx) * (x - cx) + (y - cy) * (y - cy) <= 22 * 22 {
+                        a[y * w + x] = rgb(170, 150, 125)                     // pale wheat: low contrast
+                    }
+                }
+                grains += 1
+            }
+        }
+        let r = DalCounter.count(argb: a, width: w, height: h)
+        XCTAssertEqual(r.count, grains)
+    }
+
+    /// Mixed grains: long single grains among small round seeds are not split up or flagged.
+    func testMixedSizesAreNotSplit() {
+        let w = 1280, h = 960
+        var a = [UInt32](repeating: rgb(225, 225, 228), count: w * h)
+        var grains = 0
+        for row in 0..<4 {
+            for col in 0..<7 {
+                let cx = 110 + col * 175, cy = 130 + row * 220
+                let long = (row * 7 + col) % 4 == 0                           // wheat-like ellipse among small seeds
+                let ra = long ? 30.0 : 10.0, rb = long ? 13.0 : 10.0
+                for y in (cy - 32)...(cy + 32) {
+                    for x in (cx - 32)...(cx + 32) {
+                        let u = Double(x - cx) / ra, v = Double(y - cy) / rb
+                        if u * u + v * v <= 1 { a[y * w + x] = long ? rgb(150, 105, 60) : rgb(50, 35, 30) }
+                    }
+                }
+                grains += 1
+            }
+        }
+        let r = DalCounter.count(argb: a, width: w, height: h)
+        XCTAssertEqual(r.count, grains)
+        XCTAssertEqual(r.uncertainCount, 0)
+    }
+}
+
+/// Small deterministic random numbers for test images.
+struct SplitMix {
+    var state: UInt64
+    init(seed: UInt64) { state = seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+    mutating func unit() -> Double { Double(next() >> 11) / Double(1 << 53) }
 }
