@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.ImageFormat;
 import android.graphics.SurfaceTexture;
+import android.graphics.drawable.GradientDrawable;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -29,9 +30,7 @@ import android.view.OrientationEventListener;
 import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
-import android.widget.Button;
 import android.widget.FrameLayout;
-import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -50,7 +49,7 @@ public class CameraActivity extends Activity {
     private static final int WANTED_LONG_SIDE = 2560;
 
     private PreviewView preview;
-    private Button shutter;
+    private View shutter;
     private HandlerThread thread;
     private Handler handler;
     private OrientationEventListener orientationListener;
@@ -75,22 +74,23 @@ public class CameraActivity extends Activity {
         root.addView(preview, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
 
-        TextView tip = new TextView(this);
-        tip.setText("Hold the phone flat, straight above the grains");
-        tip.setTextColor(Color.WHITE);
-        tip.setTextSize(14);
+        Ui.init(this);
+        TextView tip = Ui.text(this, "Hold the phone flat, straight above the grains", 14, Ui.MEDIUM, Color.WHITE);
         tip.setGravity(Gravity.CENTER);
-        tip.setBackgroundColor(Color.argb(120, 0, 0, 0));
-        tip.setPadding(dp(8), dp(8), dp(8), dp(8));
-        root.addView(tip, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP));
+        tip.setBackground(Ui.fill(Color.argb(140, 30, 30, 34), 18));
+        tip.setPadding(dp(16), dp(10), dp(16), dp(10));
+        FrameLayout.LayoutParams tl = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        tl.topMargin = dp(48);
+        root.addView(tip, tl);
 
-        LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setPadding(dp(12), dp(12), dp(12), dp(16));
-        bar.setBackgroundColor(Color.argb(120, 0, 0, 0));
-        Button cancel = new Button(this);
-        cancel.setText("Cancel");
+        // iOS-style controls: Cancel on the left, a big round white shutter in the middle.
+        FrameLayout bar = new FrameLayout(this);
+        bar.setBackground(new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP,
+                new int[] {Color.argb(200, 0, 0, 0), Color.argb(0, 0, 0, 0)}));
+        bar.setPadding(dp(20), dp(28), dp(20), dp(36));
+        TextView cancel = Ui.text(this, "Cancel", 17, Ui.MEDIUM, Color.WHITE);
+        cancel.setPadding(dp(8), dp(12), dp(8), dp(12));
         cancel.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -98,20 +98,30 @@ public class CameraActivity extends Activity {
                 finish();
             }
         });
-        shutter = new Button(this);
-        shutter.setText("Take photo");
-        shutter.setOnClickListener(new View.OnClickListener() {
+        Ui.pressable(cancel);
+        bar.addView(cancel, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.START | Gravity.CENTER_VERTICAL));
+        FrameLayout shutterView = new FrameLayout(this);
+        GradientDrawable ringShape = new GradientDrawable();
+        ringShape.setShape(GradientDrawable.OVAL);
+        ringShape.setStroke(dp(4), Color.WHITE);
+        shutterView.setBackground(ringShape);
+        View inner = new View(this);
+        GradientDrawable dot = new GradientDrawable();
+        dot.setShape(GradientDrawable.OVAL);
+        dot.setColor(Color.WHITE);
+        inner.setBackground(dot);
+        shutterView.addView(inner, new FrameLayout.LayoutParams(dp(62), dp(62), Gravity.CENTER));
+        shutterView.setContentDescription("Take photo");
+        shutterView.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 takePicture();
             }
         });
-        LinearLayout.LayoutParams lp1 = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        lp1.setMargins(dp(4), 0, dp(4), 0);
-        LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2f);
-        lp2.setMargins(dp(4), 0, dp(4), 0);
-        bar.addView(cancel, lp1);
-        bar.addView(shutter, lp2);
+        Ui.pressable(shutterView);
+        shutter = shutterView;
+        bar.addView(shutter, new FrameLayout.LayoutParams(dp(76), dp(76), Gravity.CENTER));
         root.addView(bar, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
         setContentView(root);
@@ -311,7 +321,13 @@ public class CameraActivity extends Activity {
         if (d == null || s == null || capturing) return;
         capturing = true;
         shutter.setEnabled(false);
-        shutter.setText("Saving...");
+        shutter.animate().alpha(0.4f).scaleX(0.9f).scaleY(0.9f).setDuration(150).start();
+        preview.animate().alpha(0.3f).setDuration(80).withEndAction(new Runnable() { // shutter flash
+            @Override
+            public void run() {
+                preview.animate().alpha(1f).setDuration(220).start();
+            }
+        }).start();
         try {
             CaptureRequest.Builder b = d.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
             b.addTarget(reader.getSurface());
@@ -373,7 +389,7 @@ public class CameraActivity extends Activity {
             public void run() {
                 capturing = false;
                 shutter.setEnabled(true);
-                shutter.setText("Take photo");
+                shutter.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(200).start();
                 Toast.makeText(CameraActivity.this, "Could not take the photo", Toast.LENGTH_SHORT).show();
             }
         });

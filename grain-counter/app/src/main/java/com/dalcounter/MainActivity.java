@@ -1,68 +1,144 @@
 package com.dalcounter;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.ClipData;
 import android.content.ContentResolver;
 import android.content.ContentValues;
-import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Matrix;
-import android.graphics.Typeface;
 import android.media.ExifInterface;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
-import android.view.Gravity;
 import android.view.View;
-import android.widget.Button;
-import android.widget.LinearLayout;
-import android.widget.TextView;
-import android.widget.Toast;
+import android.view.Window;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+import android.view.animation.DecelerateInterpolator;
+import android.view.animation.PathInterpolator;
+import android.widget.FrameLayout;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
 
 /**
- * Single-screen grain counter: take, pick or share a photo, count the grains on the phone (no internet),
- * fix any miss by tapping, then save or share the numbered picture.
+ * Hosts the screens (Home, Result, History, picture) in a navigation stack with iOS-style push and pop,
+ * and does the work that needs the activity: picking, the camera, saving and sharing.
  */
-public class MainActivity extends Activity implements CountView.Listener {
+public class MainActivity extends Activity {
 
     private static final int REQ_PICK = 1;
     private static final int REQ_CAMERA = 2;
     private static final int REQ_CAMERA_PERMISSION = 3;
     /** Photos are processed at this long-side size: fast on a phone and as accurate as full size. */
-    private static final int MAX_SIDE = 1280;
+    static final int MAX_SIDE = 1280;
 
-    private CountView view;
-    private TextView total;
-    private TextView hintView;
-    private Button undoButton;
+    /** One screen in the stack. */
+    abstract static class Screen {
+        final MainActivity app;
+        View view;
 
-    private Uri sourceUri;
-    private Uri savedUri;
-    private String hint;
-    private String note;
-    private boolean busy;
+        Screen(MainActivity app) {
+            this.app = app;
+        }
+
+        abstract View build();
+
+        void onShow() {}
+
+        void onHide() {}
+
+        /** Handles Back itself (e.g. leaves review mode); false = pop the screen. */
+        boolean onBack() {
+            return false;
+        }
+
+        /** True when the screen is dark (photo), so the status bar icons must be light. */
+        boolean darkScreen() {
+            return Ui.dark;
+        }
+
+        void onInsets() {}
+
+        void save(Bundle out) {}
+    }
+
+    private FrameLayout container;
+    FrameLayout overlay;
+    private final ArrayList<Screen> stack = new ArrayList<Screen>();
+    int insetTop, insetBottom;
+    private boolean animating;
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
-        buildUi();
+        Ui.init(this);
+        edgeToEdge();
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(Ui.dark ? Color.BLACK : Color.rgb(250, 240, 230));
+        container = new FrameLayout(this);
+        overlay = new FrameLayout(this);
+        root.addView(container);
+        root.addView(overlay);
+        root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override
+            @SuppressWarnings("deprecation")
+            public WindowInsets onApplyWindowInsets(View v, WindowInsets in) {
+                insetTop = in.getSystemWindowInsetTop();
+                insetBottom = in.getSystemWindowInsetBottom();
+                overlay.setPadding(0, insetTop, 0, 0);
+                for (Screen s : stack) s.onInsets();
+                return in;
+            }
+        });
+        setContentView(root);
 
+        push(new HomeScreen(this), false);
         if (state != null) {
             String src = state.getString("src");
             if (src != null) {
-                load(Uri.parse(src), state.getFloatArray("mk"), state.getFloat("rad", 12f),
-                        state.getFloat("band", 25f), state.getString("hint"), state.getString("note"));
+                push(new ResultScreen(this, Uri.parse(src), state.getFloatArray("mk"), state.getString("hid")), false);
             }
         } else {
             handleIntent(getIntent());
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private void edgeToEdge() {
+        Window w = getWindow();
+        w.setStatusBarColor(Color.TRANSPARENT);
+        w.setNavigationBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= 30) {
+            w.setDecorFitsSystemWindows(false);
+        } else {
+            w.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+        }
+    }
+
+    /** Dark icons on light screens, light icons over photos. */
+    @SuppressWarnings("deprecation")
+    private void statusIcons(boolean darkScreen) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            WindowInsetsController c = getWindow().getInsetsController();
+            if (c != null) {
+                int light = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                c.setSystemBarsAppearance(darkScreen ? 0 : light, light);
+            }
+        } else {
+            View d = getWindow().getDecorView();
+            int f = d.getSystemUiVisibility();
+            f = darkScreen ? f & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR : f | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            d.setSystemUiVisibility(f);
         }
     }
 
@@ -76,137 +152,88 @@ public class MainActivity extends Activity implements CountView.Listener {
     @Override
     protected void onSaveInstanceState(Bundle out) {
         super.onSaveInstanceState(out);
-        if (sourceUri != null && view.hasData()) {
-            out.putString("src", sourceUri.toString());
-            out.putFloatArray("mk", view.exportMarkers());
-            out.putFloat("rad", view.getRadius());
-            out.putFloat("band", view.getBand());
-            if (hint != null) out.putString("hint", hint);
-            if (note != null) out.putString("note", note);
+        Screen top = top();
+        if (top != null) top.save(out);
+    }
+
+    // ------------------------------------------------------------------ navigation
+
+    Screen top() {
+        return stack.isEmpty() ? null : stack.get(stack.size() - 1);
+    }
+
+    private static final PathInterpolator EASE = new PathInterpolator(0.2f, 0.9f, 0.25f, 1f);
+
+    void push(Screen s) {
+        push(s, true);
+    }
+
+    private void push(final Screen s, boolean animated) {
+        if (animating) return;
+        final Screen below = top();
+        s.view = s.build();
+        container.addView(s.view);
+        stack.add(s);
+        statusIcons(s.darkScreen());
+        s.onShow();
+        if (below == null) return;
+        below.onHide();
+        if (!animated) {
+            below.view.setVisibility(View.INVISIBLE);
+            return;
         }
+        animating = true;
+        int w = container.getWidth() > 0 ? container.getWidth() : getResources().getDisplayMetrics().widthPixels;
+        s.view.setTranslationX(w);
+        s.view.setElevation(Ui.dp(16));
+        s.view.animate().translationX(0).setDuration(420).setInterpolator(EASE).withEndAction(new Runnable() {
+            @Override
+            public void run() {
+                below.view.setVisibility(View.INVISIBLE);
+                below.view.setTranslationX(0);
+                below.view.setAlpha(1f);
+                s.view.setElevation(0);
+                animating = false;
+            }
+        }).start();
+        below.view.animate().translationX(-w * 0.3f).alpha(0.6f).setDuration(420).setInterpolator(EASE).start();
     }
 
-    // ------------------------------------------------------------------ UI
-
-    private void buildUi() {
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.rgb(32, 32, 32));
-
-        LinearLayout top = row();
-        top.addView(button("Gallery", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                pickImage();
-            }
-        }));
-        top.addView(button("Camera", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                openCamera();
-            }
-        }));
-        root.addView(top);
-
-        total = new TextView(this);
-        total.setTextColor(Color.WHITE);
-        total.setTextSize(28);
-        total.setTypeface(Typeface.DEFAULT_BOLD);
-        total.setGravity(Gravity.CENTER);
-        total.setText("Grain Counter");
-        total.setPadding(0, dp(4), 0, dp(2));
-        root.addView(total, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        hintView = new TextView(this);
-        hintView.setTextSize(13);
-        hintView.setGravity(Gravity.CENTER);
-        hintView.setPadding(dp(10), 0, dp(10), dp(4));
-        hintView.setVisibility(View.GONE);
-        root.addView(hintView, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        view = new CountView(this);
-        view.setListener(this);
-        root.addView(view, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
-
-        TextView tip = new TextView(this);
-        tip.setTextColor(Color.LTGRAY);
-        tip.setTextSize(12);
-        tip.setGravity(Gravity.CENTER);
-        tip.setText("Pinch to zoom. Tap an empty spot to add a missed grain, tap a circle to remove it.");
-        tip.setPadding(dp(8), dp(4), dp(8), 0);
-        root.addView(tip);
-
-        LinearLayout bottom = row();
-        undoButton = button("Undo", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                view.undo();
-            }
-        });
-        undoButton.setEnabled(false);
-        bottom.addView(undoButton);
-        bottom.addView(button("Fit", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                view.resetFit();
-            }
-        }));
-        bottom.addView(button("Save", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                save(false);
-            }
-        }));
-        bottom.addView(button("Share", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                save(true);
-            }
-        }));
-        root.addView(bottom);
-
-        setContentView(root);
-    }
-
-    private LinearLayout row() {
-        LinearLayout l = new LinearLayout(this);
-        l.setOrientation(LinearLayout.HORIZONTAL);
-        l.setPadding(dp(6), dp(6), dp(6), dp(6));
-        return l;
-    }
-
-    private Button button(String text, View.OnClickListener click) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setOnClickListener(click);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        lp.setMargins(dp(3), 0, dp(3), 0);
-        b.setLayoutParams(lp);
-        return b;
-    }
-
-    private int dp(int v) {
-        return Math.round(v * getResources().getDisplayMetrics().density);
+    void pop() {
+        if (stack.size() < 2 || animating) return;
+        animating = true;
+        final Screen gone = stack.remove(stack.size() - 1);
+        final Screen back = top();
+        gone.onHide();
+        int w = container.getWidth();
+        back.view.setVisibility(View.VISIBLE);
+        back.view.setTranslationX(-w * 0.3f);
+        back.view.setAlpha(0.6f);
+        back.view.animate().translationX(0).alpha(1f).setDuration(380).setInterpolator(EASE).start();
+        gone.view.setElevation(Ui.dp(16));
+        gone.view.animate().translationX(w).setDuration(380).setInterpolator(new DecelerateInterpolator(1.6f))
+                .withEndAction(new Runnable() {
+                    @Override
+                    public void run() {
+                        container.removeView(gone.view);
+                        animating = false;
+                    }
+                }).start();
+        statusIcons(back.darkScreen());
+        back.onShow();
     }
 
     @Override
-    public void onMarkersChanged(int count, boolean canUndo) {
-        total.setText("Count: " + count);
-        undoButton.setEnabled(canUndo);
-        savedUri = null; // the picture changed, so the next save/share must render it again
+    @SuppressWarnings("deprecation")
+    public void onBackPressed() {
+        Screen t = top();
+        if (t != null && t.onBack()) return;
+        if (stack.size() > 1) pop();
+        else super.onBackPressed();
     }
 
-    /** text: the photo-quality tip (null = clean photo); ignored: what was skipped as print (or null). */
-    private void showHint(String text, String ignored) {
-        hint = text;
-        note = ignored;
-        String line = text == null ? "Clean photo: this count should be exact." : text;
-        hintView.setText(ignored == null ? line : line + "\n" + ignored);
-        hintView.setTextColor(text == null ? Color.rgb(120, 220, 140) : Color.rgb(255, 190, 80));
-        hintView.setVisibility(View.VISIBLE);
+    void toast(String message, boolean ok) {
+        Ui.toast(overlay, message, ok);
     }
 
     // ------------------------------------------------------------------ input
@@ -217,18 +244,18 @@ public class MainActivity extends Activity implements CountView.Listener {
         String type = in.getType();
         if (Intent.ACTION_SEND.equals(in.getAction()) && type != null && type.startsWith("image/")) {
             Uri u = in.getParcelableExtra(Intent.EXTRA_STREAM); // photo shared to this app from the gallery
-            if (u != null) load(u, null, 0f, 0f, null, null);
+            if (u != null) push(new ResultScreen(this, u, null, null), stack.size() > 0);
         }
     }
 
-    private void pickImage() {
+    void pickImage() {
         Intent i = new Intent(Intent.ACTION_GET_CONTENT);
         i.setType("image/*");
         i.addCategory(Intent.CATEGORY_OPENABLE);
         try {
             startActivityForResult(Intent.createChooser(i, "Choose a photo"), REQ_PICK);
         } catch (Exception e) {
-            toast("No gallery app found");
+            toast("No gallery app found", false);
         }
     }
 
@@ -236,12 +263,14 @@ public class MainActivity extends Activity implements CountView.Listener {
      * Opens the app's own camera. Phone camera apps (Xiaomi, Vivo, Oppo, Realme...) can stamp "Shot on ..."
      * watermarks on their photos; photos taken here never pass through them, so they are always clean.
      */
-    private void openCamera() {
+    @SuppressWarnings("deprecation") // overridePendingTransition: the replacement needs API 34
+    void openCamera() {
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[] {Manifest.permission.CAMERA}, REQ_CAMERA_PERMISSION);
             return;
         }
         startActivityForResult(new Intent(this, CameraActivity.class), REQ_CAMERA);
+        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
     }
 
     @Override
@@ -251,81 +280,27 @@ public class MainActivity extends Activity implements CountView.Listener {
         if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
             openCamera();
         } else {
-            toast("Allow camera access to take a photo, or use Gallery");
+            toast("Allow camera access to take a photo", false);
         }
     }
 
     @Override
     protected void onActivityResult(int req, int result, Intent data) {
         super.onActivityResult(req, result, data);
-        if (req == REQ_PICK && result == RESULT_OK && data != null) {
-            load(data.getData(), null, 0f, 0f, null, null);
-        } else if (req == REQ_CAMERA && result == RESULT_OK && data != null) {
-            load(data.getData(), null, 0f, 0f, null, null);
+        if ((req == REQ_PICK || req == REQ_CAMERA) && result == RESULT_OK && data != null && data.getData() != null) {
+            push(new ResultScreen(this, data.getData(), null, null));
         }
     }
 
-    // ------------------------------------------------------------------ counting
-
-    /** Decodes and counts off the UI thread. With saved markers it only decodes (state restore). */
-    private void load(final Uri uri, final float[] savedMarkers, final float savedRadius,
-                      final float savedBand, final String savedHint, final String savedNote) {
-        if (uri == null || busy) return;
-        busy = true;
-        sourceUri = uri;
-        total.setText("Counting...");
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    final Bitmap bmp = decode(uri);
-                    final DalCounter.Result res;
-                    if (savedMarkers == null) {
-                        int w = bmp.getWidth(), h = bmp.getHeight();
-                        int[] px = new int[w * h];
-                        bmp.getPixels(px, 0, w, 0, 0, w, h);
-                        res = DalCounter.count(px, w, h);
-                    } else {
-                        res = null;
-                    }
-                    runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            busy = false;
-                            if (isDestroyed() || isFinishing()) return;
-                            if (res != null) {
-                                view.setData(bmp, res);
-                                showHint(res.hint(), res.ignoredNote());
-                            } else {
-                                view.setRestored(bmp, savedRadius, savedBand, savedMarkers);
-                                showHint(savedHint, savedNote);
-                            }
-                        }
-                    });
-                } catch (Throwable t) { // includes OutOfMemoryError on huge photos
-                    runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            busy = false;
-                            total.setText("Could not read that image");
-                        }
-                    });
-                }
-            }
-        }).start();
-    }
+    // ------------------------------------------------------------------ photos
 
     /** Decodes with EXIF rotation applied and the long side limited to MAX_SIDE. */
-    private Bitmap decode(Uri uri) throws IOException {
+    Bitmap decode(Uri uri) throws IOException {
         ContentResolver cr = getContentResolver();
-
         BitmapFactory.Options bounds = new BitmapFactory.Options();
         bounds.inJustDecodeBounds = true;
-        InputStream in = cr.openInputStream(uri);
-        try {
+        try (InputStream in = cr.openInputStream(uri)) {
             BitmapFactory.decodeStream(in, null, bounds);
-        } finally {
-            if (in != null) in.close();
         }
         int longSide = Math.max(bounds.outWidth, bounds.outHeight);
         int sample = 1;
@@ -334,26 +309,22 @@ public class MainActivity extends Activity implements CountView.Listener {
         BitmapFactory.Options opts = new BitmapFactory.Options();
         opts.inSampleSize = sample;
         Bitmap b;
-        in = cr.openInputStream(uri);
-        try {
+        try (InputStream in = cr.openInputStream(uri)) {
             b = BitmapFactory.decodeStream(in, null, opts);
-        } finally {
-            if (in != null) in.close();
         }
         if (b == null) throw new IOException("decode failed");
 
         int rotation = 0;
-        in = cr.openInputStream(uri);
-        try {
-            ExifInterface exif = new ExifInterface(in);
-            int o = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
-            if (o == ExifInterface.ORIENTATION_ROTATE_90) rotation = 90;
-            else if (o == ExifInterface.ORIENTATION_ROTATE_180) rotation = 180;
-            else if (o == ExifInterface.ORIENTATION_ROTATE_270) rotation = 270;
+        try (InputStream in = cr.openInputStream(uri)) {
+            if (in != null) {
+                ExifInterface exif = new ExifInterface(in);
+                int o = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
+                if (o == ExifInterface.ORIENTATION_ROTATE_90) rotation = 90;
+                else if (o == ExifInterface.ORIENTATION_ROTATE_180) rotation = 180;
+                else if (o == ExifInterface.ORIENTATION_ROTATE_270) rotation = 270;
+            }
         } catch (Exception ignored) {
             // no EXIF: assume upright
-        } finally {
-            if (in != null) in.close();
         }
 
         float scale = Math.min(1f, (float) MAX_SIDE / Math.max(b.getWidth(), b.getHeight()));
@@ -368,58 +339,33 @@ public class MainActivity extends Activity implements CountView.Listener {
         return b;
     }
 
-    // ------------------------------------------------------------------ output
-
-    private void save(boolean share) {
-        if (!view.hasData()) {
-            toast("Load a photo first");
-            return;
-        }
-        try {
-            if (savedUri == null) {
-                Bitmap out = view.renderExport();
-                if (out == null) throw new IOException("render failed");
-                savedUri = writePng(out);
-            }
-            if (share) {
-                Intent s = new Intent(Intent.ACTION_SEND);
-                s.setType("image/png");
-                s.putExtra(Intent.EXTRA_STREAM, savedUri);
-                s.putExtra(Intent.EXTRA_TEXT, "Grain count: " + view.getCount());
-                s.setClipData(ClipData.newRawUri("Counted image", savedUri));
-                s.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                startActivity(Intent.createChooser(s, "Share counted image"));
-            } else {
-                toast("Saved to Pictures/GrainCounter");
-            }
-        } catch (Throwable t) {
-            savedUri = null;
-            toast("Could not save the image");
-        }
-    }
-
-    private Uri writePng(Bitmap bmp) throws IOException {
+    /** Writes a picture to Pictures/GrainCounter and returns its Uri. */
+    Uri writeToGallery(Bitmap bmp, String name, boolean png) throws IOException {
         ContentValues v = new ContentValues();
-        v.put(MediaStore.Images.Media.DISPLAY_NAME, "grain_count_" + view.getCount() + "_" + System.currentTimeMillis() + ".png");
-        v.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
+        v.put(MediaStore.Images.Media.DISPLAY_NAME, name + (png ? ".png" : ".jpg"));
+        v.put(MediaStore.Images.Media.MIME_TYPE, png ? "image/png" : "image/jpeg");
         v.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/GrainCounter");
         ContentResolver cr = getContentResolver();
         Uri uri = cr.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
         if (uri == null) throw new IOException("insert failed");
-        OutputStream os = null;
-        try {
-            os = cr.openOutputStream(uri);
-            if (os == null || !bmp.compress(Bitmap.CompressFormat.PNG, 100, os)) throw new IOException("write failed");
+        try (OutputStream os = cr.openOutputStream(uri)) {
+            if (os == null || !bmp.compress(png ? Bitmap.CompressFormat.PNG : Bitmap.CompressFormat.JPEG, png ? 100 : 92, os)) {
+                throw new IOException("write failed");
+            }
         } catch (IOException e) {
             cr.delete(uri, null, null); // do not leave a broken file in the gallery
             throw e;
-        } finally {
-            if (os != null) os.close();
         }
         return uri;
     }
 
-    private void toast(String s) {
-        Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
+    void share(Uri uri, String text) {
+        Intent s = new Intent(Intent.ACTION_SEND);
+        s.setType("image/*");
+        s.putExtra(Intent.EXTRA_STREAM, uri);
+        s.putExtra(Intent.EXTRA_TEXT, text);
+        s.setClipData(ClipData.newRawUri("Counted image", uri));
+        s.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivity(Intent.createChooser(s, "Share counted image"));
     }
 }

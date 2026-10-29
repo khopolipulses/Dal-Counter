@@ -15,7 +15,7 @@ With a Mac you can also run it directly: `brew install xcodegen && xcodegen gene
 choose your team under *Signing & Capabilities*, plug in the phone and press Run.
 
 ## Use
-- **Photos** or **Camera**. The iPhone camera never adds watermarks; photos from other phones that carry a
+- Home has **Take Photo** and **Choose from Photos**, your recent counts and tips. The iPhone camera never adds watermarks; photos from other phones that carry a
   "Shot on ..." watermark, date stamp or frame still count correctly, as the watermark is ignored.
 - Best photo: grains spread out, one plain background (any colour that differs from the grains), even light, taken from above.
 - Printed text, lines and symbols on the sheet or packet (labels, numbers, underlines, arrows, ticks, boxes, rulers)
@@ -23,15 +23,34 @@ choose your team under *Signing & Capabilities*, plug in the phone and press Run
 - **Mixed grains** work: wheat, round seeds, lentils, beans... in one photo are each counted once (a big grain is
   not split just because it is bigger than the others).
 - **Light reflections** (flash, lamp or window glare on a glossy white table) are ignored.
-- Blue ring = certain, **orange** = touching/overlapping group (check these), **green** = added by you.
-- Tap an empty spot to add a missed grain, tap a ring to remove one. **Undo** reverts. Pinch to zoom, drag to pan, **Fit** resets.
-- The yellow/green line under the count tells you if the photo is good enough for an exact count.
+- Blue ring = counted, **orange** = worth a check, **green** = added by you, blue with a tick = checked by you.
+- Tap an empty spot to add a missed grain, tap a ring to remove one. **Undo** reverts. Pinch or double tap to zoom. Pinch to zoom, drag to pan, **Fit** resets.
+- The pill under the count says *Looks exact*, *N to check* or *Checked by you*; a tip appears when the photo itself could be better.
+- **History** keeps every count on the phone (thumbnail, number, date); open one to zoom, share or delete it.
 - **Save** adds the numbered PNG to Photos, **Share** sends it anywhere.
+
+## Getting an exact count
+1. Take or choose a photo. The count appears in a second; every ring is one grain.
+2. **Blue** rings are counted with confidence. **Orange** rings are the ones worth a look: grains that touch or
+   overlap, broken pieces, or anything that looks unlike the other grains in the photo.
+3. Tap the orange **"N to check"** pill (or **Review**). The app glides to each orange grain and asks
+   *"Is this exactly one grain?"*: **Yes** (it gets a tick) or **Not a grain** (removed). Missed one? Tap the empty
+   spot to add it (green). When nothing orange is left, the pill says **Checked by you** and the count is exact.
+
+On the 70 test photos, every extra count the engine still makes outside the pale-rice-on-white cases is flagged
+orange, so after Review the final number is right. Grains completely hidden under others cannot be seen by anyone;
+spread them out when you need the last grain.
+
+## Design
+Apple-style: large titles, frosted glass cards and toolbars over a softly drifting warm background, the photo full screen
+under floating glass controls, spring animations (markers pop in, the count counts up, review glides from grain to grain),
+haptics, light and dark mode. Native blur materials and SF Symbols; Reduce Motion is respected.
 
 ## Code
 - `Core/` - `DalCounter.swift` (counting engine) and `Markers.swift` (edit list). Plain Swift, no UIKit:
   `swift test` runs their tests on macOS or Linux.
-- `App/` - UIKit screen (`MainViewController`), the zoomable photo view (`CountView`), Info.plist and icon.
+- `App/` - UIKit screens (`HomeViewController`, `ResultViewController` with review, `HistoryViewController`), the zoomable
+  photo view (`CountView`), `Theme` (glass, buttons, background, toasts), `HistoryStore`, Info.plist and icon.
 - `project.yml` - XcodeGen spec for the app (the `.xcodeproj` is generated, not committed).
 
 Limits are the same as on Android (see `../grain-counter/README.md`). If you change the engine, change `grain-counter/.../DalCounter.java` the same way so the two apps stay in step.
