@@ -113,6 +113,44 @@ def draw_marks(rng, W, H, rad, s, kinds, ink_col):
     return np.asarray(ink).astype(np.float32) / 255.0, np.asarray(keep_out) > 0
 
 
+def add_watermark(pil, style, s):
+    """What phone camera apps stamp on the finished photo (crisp, after all camera processing)."""
+    W, H = pil.size
+    u = min(W, H)
+    if style == "frame":  # white bar under the photo: model, logo, lens data
+        bar = int(0.085 * H)
+        out = Image.new("RGB", (W, H + bar), (255, 255, 255))
+        out.paste(pil, (0, 0))
+        d = ImageDraw.Draw(out)
+        cy = H + bar / 2
+        d.text((0.03 * W, cy), "Xiaomi 14 Ultra", fill=(20, 20, 20), font=font(0.034 * u, bold=True), anchor="lm")
+        r = 0.018 * u
+        lx = 0.60 * W
+        d.ellipse([lx - r, cy - r, lx + r, cy + r], fill=(210, 30, 30))                    # Leica-style red dot
+        d.text((lx, cy), "Leica", fill=(255, 255, 255), font=font(0.009 * u, bold=True), anchor="mm")
+        d.line([lx + 2 * r, cy - r, lx + 2 * r, cy + r], fill=(160, 160, 160), width=max(1, int(2 * s)))
+        d.text((lx + 2.6 * r, cy), "23mm f/1.6 1/100s ISO50", fill=(60, 60, 60), font=font(0.026 * u), anchor="lm")
+        return out
+    d = ImageDraw.Draw(pil)
+    if style == "shot_on":  # Xiaomi / Redmi / Poco style, bottom left, white
+        x, y = 0.025 * W, H - 0.085 * H
+        d.text((x, y), "Shot on Redmi Note 13 Pro+", fill=(250, 250, 250), font=font(0.032 * u))
+        d.text((x, y + 0.042 * u), "AI QUAD CAMERA", fill=(250, 250, 250), font=font(0.02 * u))
+        rr = 0.012 * u                                                                         # small logo square
+        d.rounded_rectangle([x - 0.0 * u, y - 3.2 * rr, x + 2.2 * rr, y - 1.0 * rr], radius=rr * 0.5, fill=(255, 105, 0))
+    elif style == "shot_on_shadow":  # same with a soft dark shadow (readable on white paper)
+        for dx, dy, col in ((2, 2, (90, 90, 90)), (0, 0, (250, 250, 250))):
+            x, y = 0.025 * W + dx * s, H - 0.085 * H + dy * s
+            d.text((x, y), "Shot on OPPO Reno11 5G", fill=col, font=font(0.032 * u))
+            d.text((x, y + 0.042 * u), "2026.10.29 18:42", fill=col, font=font(0.02 * u))
+    elif style == "vivo":  # bottom right, white, brand | lens
+        x, y = W - 0.03 * W, H - 0.06 * H
+        d.text((x, y), "vivo X100 Pro  |  ZEISS", fill=(245, 245, 245), font=font(0.03 * u, bold=True), anchor="rs")
+    elif style == "date":  # old style orange date stamp, bottom right
+        d.text((W - 0.04 * W, H - 0.05 * H), "'26 10 29  18:42", fill=(255, 140, 20), font=font(0.035 * u, bold=True), anchor="rs")
+    return pil
+
+
 def place(rng, n, rad, min_f, region, cluster):
     """Dart throwing inside polygon mask `region`; centres at least min_f*rad apart."""
     H, W = region.shape
@@ -255,6 +293,8 @@ def render(c):
     arr = np.asarray(pil).astype(np.float32)
     arr += rng.normal(0, c.get("noise", 2.5), arr.shape)
     pil = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
+    if c.get("watermark"):
+        pil = add_watermark(pil, c["watermark"], s)
 
     truth = []
     for i, (px, py) in enumerate(pts):
@@ -321,6 +361,15 @@ CASES = [
     ("H08_wheat_text_touching", dict(grain="wheat", n=150, min_f=1.8, marks=("text", "symbols"), cluster=(0.5, 0.5, 0.2, 0.22))),
     ("H09_grains_on_text", dict(n=110, min_f=2.6, marks=("text", "symbols"), on_marks=True)),
     ("H10_mustard_text", dict(grain="mustard", n=250, min_f=3.0, marks=("text", "symbols"))),
+    # ---- phone camera watermarks: they must be ignored
+    ("W01_shot_on", dict(n=120, min_f=2.6, watermark="shot_on")),
+    ("W02_shot_on_dark_tray", dict(n=120, min_f=2.6, no_paper=True, table=(40, 40, 44), watermark="shot_on")),
+    ("W03_shot_on_full_paper", dict(n=120, min_f=2.6, paper=1.02, watermark="shot_on_shadow")),
+    ("W04_frame_leica", dict(n=120, min_f=2.6, watermark="frame")),
+    ("W05_vivo_dark_tray", dict(n=120, min_f=2.6, no_paper=True, table=(40, 40, 44), watermark="vivo")),
+    ("W06_date_stamp", dict(n=120, min_f=2.6, paper=1.02, watermark="date")),
+    ("W07_frame_sesame", dict(grain="sesame_black", n=200, min_f=2.4, watermark="frame")),
+    ("W08_portrait_shot_on", dict(n=120, min_f=2.6, W=1449, H=2576, paper=1.02, watermark="shot_on_shadow")),
 ]
 
 if __name__ == "__main__":

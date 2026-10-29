@@ -123,7 +123,7 @@ public final class DalCounter {
         }
 
         // Printed text, lines and symbols on the sheet are not grains: drop them before measuring grains.
-        res.ignoredCount = removeMarks(open, mask, lab, nLab, area, w, h, s);
+        res.ignoredCount = removeMarks(argb, open, mask, lab, nLab, area, w, h, s);
 
         // Typical single-lentil area = median of the components that are not tiny crumbs.
         double[] all = filterAbove(Arrays.copyOfRange(area, 1, nLab + 1), 0);
@@ -351,8 +351,8 @@ public final class DalCounter {
      * a mark (the rest of a word, i dots, full stops, hyphens) go with it.
      * Returns the number of pieces removed; their area is set to 0.
      */
-    private static int removeMarks(boolean[] open, boolean[] mask, int[] lab, int nLab, double[] area, int w, int h,
-                                   float s) {
+    private static int removeMarks(int[] argb, boolean[] open, boolean[] mask, int[] lab, int nLab, double[] area,
+                                   int w, int h, float s) {
         final int n = w * h;
         // Half-thickness of every piece, measured with its holes still open (an "o" is a thin ring, not a disc).
         double[] du = edt(open, w, h);
@@ -381,13 +381,15 @@ public final class DalCounter {
 
         boolean[] thin = new boolean[nLab + 1];
         boolean[] mark = new boolean[nLab + 1];
+        boolean[] sure = new boolean[nLab + 1]; // clearly print (not just a speck): may pull its neighbours in
         int marks = 0;
         for (int l = 1; l <= nLab; l++) {
             thin[l] = inkArea[l] > 0 && thick[l] < MARK_THIN * typical;
             if (!thin[l]) continue;
             double stroke = inkArea[l] / (Math.PI * thick[l] * thick[l]);
             double hole = 1 - inkArea[l] / area[l];
-            if (stroke > MARK_STROKE || hole > MARK_HOLE || area[l] < MARK_SPECK * grainArea || thick[l] <= hairline) {
+            sure[l] = stroke > MARK_STROKE || hole > MARK_HOLE || thick[l] <= hairline;
+            if (sure[l] || area[l] < MARK_SPECK * grainArea) {
                 mark[l] = true;
                 marks++;
             }
@@ -415,7 +417,7 @@ public final class DalCounter {
         for (int l = 1; l <= nLab; l++) if (!mark[l] && thin[l] && area[l] < 0.35 * grainArea) cand[ncand++] = l;
         int[] queue = new int[nLab];
         int qn = 0;
-        for (int l = 1; l <= nLab; l++) if (mark[l]) queue[qn++] = l;
+        for (int l = 1; l <= nLab; l++) if (sure[l]) queue[qn++] = l;
         double near = 2.5 * typical;
         for (int q = 0; q < qn && ncand > 0; q++) {
             int m = queue[q];
@@ -431,6 +433,8 @@ public final class DalCounter {
                 }
             }
         }
+        marks += removeWatermark(argb, lab, mark, area, minX, maxX, minY, maxY, nLab, w, h, grainArea, true);
+        marks += removeWatermark(argb, lab, mark, area, minX, maxX, minY, maxY, nLab, w, h, grainArea, false);
         for (int i = 0; i < n; i++) {
             if (lab[i] > 0 && mark[lab[i]]) {
                 lab[i] = 0;
@@ -439,6 +443,79 @@ public final class DalCounter {
         }
         for (int l = 1; l <= nLab; l++) if (mark[l]) area[l] = 0;
         return marks;
+    }
+
+    /** Camera watermarks sit within this fraction of the photo height from the top or bottom edge. */
+    private static final float WATERMARK_BAND = 0.16f;
+
+    /**
+     * Phone camera watermarks ("Shot on ...", "AI QUAD CAMERA", the phone model, a date stamp, a small brand logo)
+     * are a line of text in a corner at the bottom (or top) of the photo. When marks form such a line, the pieces
+     * inside the line's box that have the text's colour (bold letters) or a badge shape (a square logo) go too.
+     * Grains of another colour next to the watermark are kept.
+     * Returns the number of extra pieces removed.
+     */
+    private static int removeWatermark(int[] argb, int[] lab, boolean[] mark, double[] area, int[] minX, int[] maxX,
+                                       int[] minY, int[] maxY, int nLab, int w, int h, double grainArea,
+                                       boolean bottom) {
+        double band = WATERMARK_BAND * h;
+        boolean[] line = new boolean[nLab + 1];
+        int bx0 = Integer.MAX_VALUE, bx1 = -1, by0 = Integer.MAX_VALUE, by1 = -1, k = 0;
+        double[] heights = new double[nLab];
+        for (int l = 1; l <= nLab; l++) {
+            if (!mark[l] || maxX[l] < 0) continue;
+            boolean in = bottom ? minY[l] >= h - band : maxY[l] <= band;
+            if (!in) continue;
+            line[l] = true;
+            bx0 = Math.min(bx0, minX[l]);
+            bx1 = Math.max(bx1, maxX[l]);
+            by0 = Math.min(by0, minY[l]);
+            by1 = Math.max(by1, maxY[l]);
+            heights[k++] = maxY[l] - minY[l] + 1;
+        }
+        if (k < 4) return 0;                                           // a few specks are not a line of text
+        boolean corner = bx0 < 0.12 * w || bx1 > 0.88 * w;             // anchored to the left or right edge
+        boolean edge = bottom ? by1 > h - 0.1 * h : by0 < 0.1 * h;     // and close to the top / bottom edge
+        if (!corner || !edge) return 0;
+        // Bold letters: tight box around the text. Logo badge: anywhere within one block height of it.
+        double lineH = median(Arrays.copyOf(heights, k)), blockH = by1 - by0 + 1;
+        double x0 = bx0 - 1.5 * lineH, x1 = bx1 + 1.5 * lineH, y0 = by0 - 0.5 * lineH, y1 = by1 + 0.5 * lineH;
+        double lx0 = bx0 - blockH, lx1 = bx1 + blockH, ly0 = by0 - blockH, ly1 = by1 + blockH;
+        boolean[] inBox = new boolean[nLab + 1], nearBox = new boolean[nLab + 1];
+        int nIn = 0;
+        for (int l = 1; l <= nLab; l++) {
+            if (mark[l] || maxX[l] < 0 || area[l] > 3 * grainArea) continue;
+            inBox[l] = minX[l] >= x0 && maxX[l] <= x1 && minY[l] >= y0 && maxY[l] <= y1;
+            nearBox[l] = minX[l] >= lx0 && maxX[l] <= lx1 && minY[l] >= ly0 && maxY[l] <= ly1;
+            if (nearBox[l]) nIn++;
+        }
+        if (nIn == 0) return 0;
+
+        // Colour of the watermark text vs colour of each piece in the box.
+        double tr = 0, tg = 0, tb = 0, tn = 0;
+        double[] cr = new double[nLab + 1], cg = new double[nLab + 1], cb = new double[nLab + 1];
+        for (int i = 0; i < argb.length; i++) {
+            int l = lab[i];
+            if (l == 0 || !(line[l] || nearBox[l])) continue;
+            int p = argb[i];
+            int r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255;
+            if (line[l]) { tr += r; tg += g; tb += b; tn++; }
+            else { cr[l] += r; cg[l] += g; cb[l] += b; }
+        }
+        tr /= tn; tg /= tn; tb /= tn;
+        int removed = 0;
+        for (int l = 1; l <= nLab; l++) {
+            if (!nearBox[l]) continue;
+            double dr = cr[l] / area[l] - tr, dg = cg[l] / area[l] - tg, db = cb[l] / area[l] - tb;
+            boolean textColour = inBox[l] && Math.sqrt(dr * dr + dg * dg + db * db) < 60;
+            double boxFill = area[l] / ((double) (maxX[l] - minX[l] + 1) * (maxY[l] - minY[l] + 1));
+            boolean badge = boxFill > 0.85;                            // square / rectangular logo (grains fill <= ~0.82)
+            if (textColour || badge) {
+                mark[l] = true;
+                removed++;
+            }
+        }
+        return removed;
     }
 
     /** Sorts markers top-to-bottom in bands, then left-to-right, so numbers are easy to follow. */

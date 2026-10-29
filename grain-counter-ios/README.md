@@ -15,7 +15,8 @@ With a Mac you can also run it directly: `brew install xcodegen && xcodegen gene
 choose your team under *Signing & Capabilities*, plug in the phone and press Run.
 
 ## Use
-- **Photos** or **Camera**.
+- **Photos** or **Camera**. The iPhone camera never adds watermarks; photos from other phones that carry a
+  "Shot on ..." watermark, date stamp or frame still count correctly, as the watermark is ignored.
 - Best photo: grains spread out, one plain background (any colour that differs from the grains), even light, taken from above.
 - Printed text, lines and symbols on the sheet or packet (labels, numbers, underlines, arrows, ticks, boxes, rulers)
   are recognised and **not counted**; the line under the count says how many pieces were ignored.

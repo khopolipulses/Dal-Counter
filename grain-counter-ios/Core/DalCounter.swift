@@ -119,7 +119,7 @@ public enum DalCounter {
         }
 
         // Printed text, lines and symbols on the sheet are not grains: drop them before measuring grains.
-        res.ignoredCount = removeMarks(opened, &mask, &lab, nLab, &area, w, h, s)
+        res.ignoredCount = removeMarks(argb, opened, &mask, &lab, nLab, &area, w, h, s)
 
         // Typical single-grain area = median of the components that are not tiny crumbs.
         let all = area[1...nLab].filter { $0 > 0 }
@@ -337,8 +337,8 @@ public enum DalCounter {
      * a mark (the rest of a word, i dots, full stops, hyphens) go with it.
      * Returns the number of pieces removed; their area is set to 0.
      */
-    private static func removeMarks(_ open: [Bool], _ mask: inout [Bool], _ lab: inout [Int32], _ nLab: Int,
-                                    _ area: inout [Double], _ w: Int, _ h: Int, _ s: Float) -> Int {
+    private static func removeMarks(_ argb: [UInt32], _ open: [Bool], _ mask: inout [Bool], _ lab: inout [Int32],
+                                    _ nLab: Int, _ area: inout [Double], _ w: Int, _ h: Int, _ s: Float) -> Int {
         let n = w * h
         // Half-thickness of every piece, measured with its holes still open (an "o" is a thin ring, not a disc).
         let du = edt(open, w, h)
@@ -366,14 +366,15 @@ public enum DalCounter {
 
         var thin = [Bool](repeating: false, count: nLab + 1)
         var mark = [Bool](repeating: false, count: nLab + 1)
+        var sure = [Bool](repeating: false, count: nLab + 1) // clearly print (not just a speck): may pull its neighbours in
         var marks = 0
         for l in 1...nLab {
             thin[l] = inkArea[l] > 0 && thick[l] < Double(markThin) * typical
             if !thin[l] { continue }
             let stroke = inkArea[l] / (Double.pi * thick[l] * thick[l])
             let hole = 1 - inkArea[l] / area[l]
-            if stroke > Double(markStroke) || hole > Double(markHole)
-                || area[l] < Double(markSpeck) * grainArea || thick[l] <= hairline {
+            sure[l] = stroke > Double(markStroke) || hole > Double(markHole) || thick[l] <= hairline
+            if sure[l] || area[l] < Double(markSpeck) * grainArea {
                 mark[l] = true
                 marks += 1
             }
@@ -396,7 +397,7 @@ public enum DalCounter {
         var cand: [Int] = []
         for l in 1...nLab where !mark[l] && thin[l] && area[l] < 0.35 * grainArea { cand.append(l) }
         var queue: [Int] = []
-        for l in 1...nLab where mark[l] { queue.append(l) }
+        for l in 1...nLab where sure[l] { queue.append(l) }
         let near = 2.5 * typical
         var q = 0
         while q < queue.count && !cand.isEmpty {
@@ -417,6 +418,9 @@ public enum DalCounter {
             }
             q += 1
         }
+        let bounds = Bounds(minX: minX, maxX: maxX, minY: minY, maxY: maxY)
+        marks += removeWatermark(argb, lab, &mark, area, bounds, nLab, w, h, grainArea, bottom: true)
+        marks += removeWatermark(argb, lab, &mark, area, bounds, nLab, w, h, grainArea, bottom: false)
         for i in 0..<n {
             let l = Int(lab[i])
             if l > 0 && mark[l] {
@@ -426,6 +430,86 @@ public enum DalCounter {
         }
         for l in 1...nLab where mark[l] { area[l] = 0 }
         return marks
+    }
+
+    /// Camera watermarks sit within this fraction of the photo height from the top or bottom edge.
+    private static let watermarkBand: Float = 0.16
+
+    /// Bounding boxes of the labelled pieces.
+    private struct Bounds {
+        let minX: [Int], maxX: [Int], minY: [Int], maxY: [Int]
+    }
+
+    /**
+     * Phone camera watermarks ("Shot on ...", "AI QUAD CAMERA", the phone model, a date stamp, a small brand logo)
+     * are a line of text in a corner at the bottom (or top) of the photo. When marks form such a line, the pieces
+     * inside the line's box that have the text's colour (bold letters) or a badge shape (a square logo) go too.
+     * Grains of another colour next to the watermark are kept.
+     * Returns the number of extra pieces removed.
+     */
+    private static func removeWatermark(_ argb: [UInt32], _ lab: [Int32], _ mark: inout [Bool], _ area: [Double],
+                                        _ b: Bounds, _ nLab: Int, _ w: Int, _ h: Int, _ grainArea: Double,
+                                        bottom: Bool) -> Int {
+        let band = Double(watermarkBand) * Double(h)
+        var line = [Bool](repeating: false, count: nLab + 1)
+        var bx0 = Int.max, bx1 = -1, by0 = Int.max, by1 = -1
+        var heights: [Double] = []
+        for l in 1...nLab where mark[l] && b.maxX[l] >= 0 {
+            let inBand = bottom ? Double(b.minY[l]) >= Double(h) - band : Double(b.maxY[l]) <= band
+            if !inBand { continue }
+            line[l] = true
+            bx0 = min(bx0, b.minX[l])
+            bx1 = max(bx1, b.maxX[l])
+            by0 = min(by0, b.minY[l])
+            by1 = max(by1, b.maxY[l])
+            heights.append(Double(b.maxY[l] - b.minY[l] + 1))
+        }
+        if heights.count < 4 { return 0 }                                     // a few specks are not a line of text
+        let corner = Double(bx0) < 0.12 * Double(w) || Double(bx1) > 0.88 * Double(w) // anchored to the left or right edge
+        let edge = bottom ? Double(by1) > Double(h) - 0.1 * Double(h) : Double(by0) < 0.1 * Double(h) // and near top / bottom
+        if !corner || !edge { return 0 }
+        // Bold letters: tight box around the text. Logo badge: anywhere within one block height of it.
+        let lineH = median(heights), blockH = Double(by1 - by0 + 1)
+        let x0 = Double(bx0) - 1.5 * lineH, x1 = Double(bx1) + 1.5 * lineH
+        let y0 = Double(by0) - 0.5 * lineH, y1 = Double(by1) + 0.5 * lineH
+        let lx0 = Double(bx0) - blockH, lx1 = Double(bx1) + blockH, ly0 = Double(by0) - blockH, ly1 = Double(by1) + blockH
+        var inBox = [Bool](repeating: false, count: nLab + 1), nearBox = inBox
+        var nIn = 0
+        for l in 1...nLab {
+            if mark[l] || b.maxX[l] < 0 || area[l] > 3 * grainArea { continue }
+            let (mnx, mxx, mny, mxy) = (Double(b.minX[l]), Double(b.maxX[l]), Double(b.minY[l]), Double(b.maxY[l]))
+            inBox[l] = mnx >= x0 && mxx <= x1 && mny >= y0 && mxy <= y1
+            nearBox[l] = mnx >= lx0 && mxx <= lx1 && mny >= ly0 && mxy <= ly1
+            if nearBox[l] { nIn += 1 }
+        }
+        if nIn == 0 { return 0 }
+
+        // Colour of the watermark text vs colour of each piece in the box.
+        var tr = 0.0, tg = 0.0, tb = 0.0, tn = 0.0
+        var cr = [Double](repeating: 0, count: nLab + 1), cg = cr, cb = cr
+        for i in 0..<argb.count {
+            let l = Int(lab[i])
+            if l == 0 || !(line[l] || nearBox[l]) { continue }
+            let (r, g, bl) = rgb(argb[i])
+            if line[l] {
+                tr += Double(r); tg += Double(g); tb += Double(bl); tn += 1
+            } else {
+                cr[l] += Double(r); cg[l] += Double(g); cb[l] += Double(bl)
+            }
+        }
+        tr /= tn; tg /= tn; tb /= tn
+        var removed = 0
+        for l in 1...nLab where nearBox[l] {
+            let dr = cr[l] / area[l] - tr, dg = cg[l] / area[l] - tg, db = cb[l] / area[l] - tb
+            let textColour = inBox[l] && (dr * dr + dg * dg + db * db).squareRoot() < 60
+            let boxFill = area[l] / (Double(b.maxX[l] - b.minX[l] + 1) * Double(b.maxY[l] - b.minY[l] + 1))
+            let badge = boxFill > 0.85                                          // square / rectangular logo (grains fill <= ~0.82)
+            if textColour || badge {
+                mark[l] = true
+                removed += 1
+            }
+        }
+        return removed
     }
 
     /// Stable sort (like Java's Collections.sort), so equal keys keep their order on every platform.

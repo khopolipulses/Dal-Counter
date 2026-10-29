@@ -4,7 +4,9 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ContentResolver;
 import android.content.ContentValues;
+import android.Manifest;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
@@ -33,6 +35,7 @@ public class MainActivity extends Activity implements CountView.Listener {
 
     private static final int REQ_PICK = 1;
     private static final int REQ_CAMERA = 2;
+    private static final int REQ_CAMERA_PERMISSION = 3;
     /** Photos are processed at this long-side size: fast on a phone and as accurate as full size. */
     private static final int MAX_SIDE = 1280;
 
@@ -42,7 +45,6 @@ public class MainActivity extends Activity implements CountView.Listener {
     private Button undoButton;
 
     private Uri sourceUri;
-    private Uri cameraUri;
     private Uri savedUri;
     private String hint;
     private String note;
@@ -54,8 +56,6 @@ public class MainActivity extends Activity implements CountView.Listener {
         buildUi();
 
         if (state != null) {
-            String cam = state.getString("cam");
-            if (cam != null) cameraUri = Uri.parse(cam); // the camera app may still deliver a result
             String src = state.getString("src");
             if (src != null) {
                 load(Uri.parse(src), state.getFloatArray("mk"), state.getFloat("rad", 12f),
@@ -76,7 +76,6 @@ public class MainActivity extends Activity implements CountView.Listener {
     @Override
     protected void onSaveInstanceState(Bundle out) {
         super.onSaveInstanceState(out);
-        if (cameraUri != null) out.putString("cam", cameraUri.toString());
         if (sourceUri != null && view.hasData()) {
             out.putString("src", sourceUri.toString());
             out.putFloatArray("mk", view.exportMarkers());
@@ -233,24 +232,26 @@ public class MainActivity extends Activity implements CountView.Listener {
         }
     }
 
+    /**
+     * Opens the app's own camera. Phone camera apps (Xiaomi, Vivo, Oppo, Realme...) can stamp "Shot on ..."
+     * watermarks on their photos; photos taken here never pass through them, so they are always clean.
+     */
     private void openCamera() {
-        ContentValues v = new ContentValues();
-        v.put(MediaStore.Images.Media.DISPLAY_NAME, "grains_" + System.currentTimeMillis() + ".jpg");
-        v.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
-        v.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/GrainCounter");
-        cameraUri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
-        if (cameraUri == null) {
-            toast("Cannot create the photo file");
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {Manifest.permission.CAMERA}, REQ_CAMERA_PERMISSION);
             return;
         }
-        Intent i = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-        i.putExtra(MediaStore.EXTRA_OUTPUT, cameraUri);
-        try {
-            startActivityForResult(i, REQ_CAMERA);
-        } catch (Exception e) {
-            getContentResolver().delete(cameraUri, null, null);
-            cameraUri = null;
-            toast("No camera app found");
+        startActivityForResult(new Intent(this, CameraActivity.class), REQ_CAMERA);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int req, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(req, permissions, results);
+        if (req != REQ_CAMERA_PERMISSION) return;
+        if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
+            openCamera();
+        } else {
+            toast("Allow camera access to take a photo, or use Gallery");
         }
     }
 
@@ -259,13 +260,8 @@ public class MainActivity extends Activity implements CountView.Listener {
         super.onActivityResult(req, result, data);
         if (req == REQ_PICK && result == RESULT_OK && data != null) {
             load(data.getData(), null, 0f, 0f, null, null);
-        } else if (req == REQ_CAMERA) {
-            if (result == RESULT_OK && cameraUri != null) {
-                load(cameraUri, null, 0f, 0f, null, null);
-            } else if (cameraUri != null) {
-                getContentResolver().delete(cameraUri, null, null); // cancelled: drop the empty entry
-                cameraUri = null;
-            }
+        } else if (req == REQ_CAMERA && result == RESULT_OK && data != null) {
+            load(data.getData(), null, 0f, 0f, null, null);
         }
     }
 
