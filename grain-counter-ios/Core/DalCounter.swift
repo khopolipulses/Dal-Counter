@@ -28,6 +28,8 @@ public enum DalCounter {
         public var brightness: Float = 0
         /// Number of markers flagged uncertain.
         public var uncertainCount = 0
+        /// Pieces of printed text, lines and symbols that were recognised and not counted.
+        public var ignoredCount = 0
 
         public init() {}
 
@@ -38,6 +40,12 @@ public enum DalCounter {
 
         /// True when the photo is good enough that the count can be trusted.
         public var reliable: Bool { count > 0 && backgroundFound && contrast >= 0.35 && noise <= 0.08 }
+
+        /// Tells the user that printed text / lines / symbols were skipped, or nil when there were none.
+        public var ignoredNote: String? {
+            if ignoredCount == 0 { return nil }
+            return "Printed text, lines and symbols were ignored (\(ignoredCount)\(ignoredCount == 1 ? " piece)." : " pieces).")"
+        }
 
         /// The single most useful tip for the user, or nil when everything looks fine.
         public var hint: String? {
@@ -81,7 +89,8 @@ public enum DalCounter {
         let n = w * h
 
         let seg = segment(argb, w, h, s)
-        var mask = open(seg.fg, w, h, 1)
+        let opened = open(seg.fg, w, h, 1)
+        var mask = opened
         fillHoles(&mask, w, h)
 
         var lab = [Int32](repeating: 0, count: n)
@@ -109,8 +118,12 @@ public enum DalCounter {
             }
         }
 
+        // Printed text, lines and symbols on the sheet are not grains: drop them before measuring grains.
+        res.ignoredCount = removeMarks(opened, &mask, &lab, nLab, &area, w, h, s)
+
         // Typical single-grain area = median of the components that are not tiny crumbs.
-        let all = Array(area[1...nLab])
+        let all = area[1...nLab].filter { $0 > 0 }
+        if all.isEmpty { return res }
         let med0 = median(all)
         let med = median(all.filter { $0 > 0.5 * med0 })
         let rad = Float((med / Double.pi).squareRoot())
@@ -304,6 +317,115 @@ public enum DalCounter {
         res.uncertain = pts.map { $0.uncertain }
         res.uncertainCount = res.uncertain.filter { $0 }.count
         return res
+    }
+
+    // ---------------------------------------------------------------- printed text and symbols
+
+    /// A mark's strokes are at most this fraction of the typical grain thickness.
+    public static let markThin: Float = 0.5
+    /// Thin pieces at least this long for their width (area / (pi * halfWidth^2)) are strokes, not broken grains.
+    public static let markStroke: Float = 5
+    /// Thin pieces with at least this much enclosed hole are letters like o, e, 0, 8 or drawn circles.
+    public static let markHole: Float = 0.2
+    /// Thin specks smaller than this fraction of a grain are bits of print or dust (broken grains are bigger).
+    public static let markSpeck: Float = 0.1
+
+    /**
+     * Finds printed text, lines and symbols (letters, digits, underlines, arrows, ticks, boxes, rulers...) and
+     * removes them from the mask and the labels. Their strokes are much thinner than the grains in the same photo,
+     * while a grain, a broken piece or a pile of touching grains is as thick as a grain. Small thin pieces next to
+     * a mark (the rest of a word, i dots, full stops, hyphens) go with it.
+     * Returns the number of pieces removed; their area is set to 0.
+     */
+    private static func removeMarks(_ open: [Bool], _ mask: inout [Bool], _ lab: inout [Int32], _ nLab: Int,
+                                    _ area: inout [Double], _ w: Int, _ h: Int, _ s: Float) -> Int {
+        let n = w * h
+        // Half-thickness of every piece, measured with its holes still open (an "o" is a thin ring, not a disc).
+        let du = edt(open, w, h)
+        var thick = [Double](repeating: 0, count: nLab + 1)
+        var inkArea = [Double](repeating: 0, count: nLab + 1)
+        for i in 0..<n {
+            let l = Int(lab[i])
+            if l > 0 && open[i] {
+                inkArea[l] += 1
+                if du[i] > thick[l] { thick[l] = du[i] }
+            }
+        }
+        // Typical grain half-thickness: upper quartile of the pieces that are not crumbs, so that a page
+        // with many letters still measures the grains.
+        let med0 = median(Array(area[1...nLab]))
+        var tc: [Double] = []
+        for l in 1...nLab where area[l] > 0.5 * med0 { tc.append(thick[l]) }
+        if tc.isEmpty { return 0 }
+        tc.sort()
+        let nc = tc.count
+        let typical = tc[min(nc - 1, Int(0.75 * Double(nc)))]
+        if typical < 2 { return 0 } // grains only a few pixels wide: strokes cannot be told apart
+        let grainArea = Double.pi * typical * typical
+        let hairline = Double(3 * s) // printed strokes are a few pixels wide; no grain or broken piece is that thin
+
+        var thin = [Bool](repeating: false, count: nLab + 1)
+        var mark = [Bool](repeating: false, count: nLab + 1)
+        var marks = 0
+        for l in 1...nLab {
+            thin[l] = inkArea[l] > 0 && thick[l] < Double(markThin) * typical
+            if !thin[l] { continue }
+            let stroke = inkArea[l] / (Double.pi * thick[l] * thick[l])
+            let hole = 1 - inkArea[l] / area[l]
+            if stroke > Double(markStroke) || hole > Double(markHole)
+                || area[l] < Double(markSpeck) * grainArea || thick[l] <= hairline {
+                mark[l] = true
+                marks += 1
+            }
+        }
+        if marks == 0 { return 0 }
+
+        // The rest of the same text: small thin pieces close to a mark, spreading letter by letter along a word.
+        // "Close" = bounding boxes less than 2.5 grain half-widths apart.
+        var minX = [Int](repeating: Int.max, count: nLab + 1), maxX = [Int](repeating: -1, count: nLab + 1)
+        var minY = [Int](repeating: Int.max, count: nLab + 1), maxY = [Int](repeating: -1, count: nLab + 1)
+        for i in 0..<n {
+            let l = Int(lab[i])
+            if l == 0 { continue }
+            let x = i % w, y = i / w
+            if x < minX[l] { minX[l] = x }
+            if x > maxX[l] { maxX[l] = x }
+            if y < minY[l] { minY[l] = y }
+            if y > maxY[l] { maxY[l] = y }
+        }
+        var cand: [Int] = []
+        for l in 1...nLab where !mark[l] && thin[l] && area[l] < 0.35 * grainArea { cand.append(l) }
+        var queue: [Int] = []
+        for l in 1...nLab where mark[l] { queue.append(l) }
+        let near = 2.5 * typical
+        var q = 0
+        while q < queue.count && !cand.isEmpty {
+            let m = queue[q]
+            var c = cand.count - 1
+            while c >= 0 {
+                let l = cand[c]
+                let gx = Double(max(0, max(minX[l] - maxX[m], minX[m] - maxX[l])))
+                let gy = Double(max(0, max(minY[l] - maxY[m], minY[m] - maxY[l])))
+                if gx * gx + gy * gy <= near * near {
+                    mark[l] = true
+                    marks += 1
+                    queue.append(l)
+                    cand[c] = cand[cand.count - 1]   // same swap-remove as the Java version, so the order matches
+                    cand.removeLast()
+                }
+                c -= 1
+            }
+            q += 1
+        }
+        for i in 0..<n {
+            let l = Int(lab[i])
+            if l > 0 && mark[l] {
+                lab[i] = 0
+                mask[i] = false
+            }
+        }
+        for l in 1...nLab where mark[l] { area[l] = 0 }
+        return marks
     }
 
     /// Stable sort (like Java's Collections.sort), so equal keys keep their order on every platform.

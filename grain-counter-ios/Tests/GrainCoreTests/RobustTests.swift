@@ -60,4 +60,38 @@ final class RobustTests: XCTestCase {
         XCTAssertEqual(r.uncertainCount, 0)
         XCTAssertNil(r.hint)
     }
+
+    /// Printed lines, rings, ticks, a ruler and hairline specks on the sheet are ignored; the grains still count.
+    func testPrintedMarksAreIgnored() {
+        let w = 1280, h = 960
+        var a = [UInt32](repeating: rgb(235, 232, 225), count: w * h)
+        let ink = rgb(25, 25, 30)
+        func dot(_ x: Int, _ y: Int, _ r: Int, _ c: UInt32) {
+            for yy in max(0, y - r)...min(h - 1, y + r) {
+                for xx in max(0, x - r)...min(w - 1, x + r) where (xx - x) * (xx - x) + (yy - y) * (yy - y) <= r * r {
+                    a[yy * w + xx] = c
+                }
+            }
+        }
+        func line(_ x0: Int, _ y0: Int, _ x1: Int, _ y1: Int, width: Int = 1) {
+            let steps = max(abs(x1 - x0), abs(y1 - y0))
+            for k in 0...steps { dot(x0 + (x1 - x0) * k / steps, y0 + (y1 - y0) * k / steps, width, ink) }
+        }
+        var grains = 0
+        for row in 0..<4 { for col in 0..<6 { dot(140 + col * 190, 140 + row * 220, 26, rgb(200, 110, 40)); grains += 1 } }
+        line(60, 40, 600, 60)                                    // underline
+        line(700, 900, 1200, 930, width: 2)                      // thicker rule
+        for k in 0...10 { line(100 + k * 30, 930, 100 + k * 30, k % 5 == 0 ? 900 : 915) } // ruler ticks
+        line(100, 930, 400, 930)
+        for t in 0..<360 {                                       // drawn circle (ring)
+            let x = 1230 + Int(30 * cos(Double(t) * .pi / 180)), y = 500 + Int(30 * sin(Double(t) * .pi / 180))
+            dot(x, y, 1, ink)
+        }
+        line(1180, 300, 1200, 320); line(1200, 320, 1240, 270)   // tick mark
+        for k in 0..<12 { dot(250 + k * 9, 250, 1, ink) }        // a row of full stops next to the grains
+        let r = DalCounter.count(argb: a, width: w, height: h)
+        XCTAssertEqual(r.count, grains)
+        XCTAssertGreaterThan(r.ignoredCount, 0)
+        XCTAssertNotNil(r.ignoredNote)
+    }
 }

@@ -17,6 +17,8 @@ choose your team under *Signing & Capabilities*, plug in the phone and press Run
 ## Use
 - **Photos** or **Camera**.
 - Best photo: grains spread out, one plain background (any colour that differs from the grains), even light, taken from above.
+- Printed text, lines and symbols on the sheet or packet (labels, numbers, underlines, arrows, ticks, boxes, rulers)
+  are recognised and **not counted**; the line under the count says how many pieces were ignored.
 - Blue ring = certain, **orange** = touching/overlapping group (check these), **green** = added by you.
 - Tap an empty spot to add a missed grain, tap a ring to remove one. **Undo** reverts. Pinch to zoom, drag to pan, **Fit** resets.
 - The yellow/green line under the count tells you if the photo is good enough for an exact count.
@@ -28,4 +30,4 @@ choose your team under *Signing & Capabilities*, plug in the phone and press Run
 - `App/` - UIKit screen (`MainViewController`), the zoomable photo view (`CountView`), Info.plist and icon.
 - `project.yml` - XcodeGen spec for the app (the `.xcodeproj` is generated, not committed).
 
-If you change the engine, change `grain-counter/.../DalCounter.java` the same way so the two apps stay in step.
+Limits are the same as on Android (see `../grain-counter/README.md`). If you change the engine, change `grain-counter/.../DalCounter.java` the same way so the two apps stay in step.

@@ -11,6 +11,8 @@ Counts grains (dal, rice, wheat, lentils, seeds, beans...) in a photo, fully on 
 ## Use
 - **Gallery / Camera**, or Share a photo from your gallery to Grain Counter.
 - Best photo: grains spread out, one plain background (any colour that differs from the grains), even light, taken from above.
+- Printed text, lines and symbols on the sheet or packet (labels, numbers, underlines, arrows, ticks, boxes, rulers)
+  are recognised and **not counted**; the line under the count says how many pieces were ignored.
 - Blue ring = certain, **orange** = touching/overlapping group (check these), **green** = added by you.
 - Tap an empty spot to add a missed grain, tap a ring to remove one. **Undo** reverts.
 - The yellow/green line under the count tells you if the photo is good enough for an exact count.
@@ -23,3 +25,5 @@ The engine learns the background and grain colour from each photo, so it works f
 ## Limits
 - Grains piled on top of each other cannot be seen; they are flagged orange for you to check.
 - Pale grains on a white background (low contrast) are flagged as unreliable.
+- Large **solid** printed shapes (a filled logo or a big bold headline) can still be counted as grains; a grain
+  lying on top of a printed line is counted correctly. Plain paper is still the safest background.

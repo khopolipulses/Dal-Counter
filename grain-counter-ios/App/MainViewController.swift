@@ -97,14 +97,13 @@ final class MainViewController: UIViewController {
         return UIButton(configuration: config, primaryAction: UIAction { _ in action() })
     }
 
-    private func showHint(_ text: String?) {
-        if let text = text {
-            hintLabel.text = text
-            hintLabel.textColor = UIColor(red: 1, green: 190 / 255, blue: 80 / 255, alpha: 1)
-        } else {
-            hintLabel.text = "Clean photo: this count should be exact."
-            hintLabel.textColor = UIColor(red: 120 / 255, green: 220 / 255, blue: 140 / 255, alpha: 1)
-        }
+    /// text: the photo-quality tip (nil = clean photo); ignored: what was skipped as print (or nil).
+    private func showHint(_ text: String?, ignored: String?) {
+        let line = text ?? "Clean photo: this count should be exact."
+        hintLabel.text = ignored.map { line + "\n" + $0 } ?? line
+        hintLabel.textColor = text == nil
+            ? UIColor(red: 120 / 255, green: 220 / 255, blue: 140 / 255, alpha: 1)
+            : UIColor(red: 1, green: 190 / 255, blue: 80 / 255, alpha: 1)
         hintLabel.isHidden = false
     }
 
@@ -168,7 +167,7 @@ final class MainViewController: UIViewController {
                     return
                 }
                 self.countView.setData(px.image, res)
-                self.showHint(res.hint)
+                self.showHint(res.hint, ignored: res.ignoredNote)
             }
         }
     }

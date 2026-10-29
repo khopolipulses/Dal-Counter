@@ -45,6 +45,7 @@ public class MainActivity extends Activity implements CountView.Listener {
     private Uri cameraUri;
     private Uri savedUri;
     private String hint;
+    private String note;
     private boolean busy;
 
     @Override
@@ -58,7 +59,7 @@ public class MainActivity extends Activity implements CountView.Listener {
             String src = state.getString("src");
             if (src != null) {
                 load(Uri.parse(src), state.getFloatArray("mk"), state.getFloat("rad", 12f),
-                        state.getFloat("band", 25f), state.getString("hint"));
+                        state.getFloat("band", 25f), state.getString("hint"), state.getString("note"));
             }
         } else {
             handleIntent(getIntent());
@@ -82,6 +83,7 @@ public class MainActivity extends Activity implements CountView.Listener {
             out.putFloat("rad", view.getRadius());
             out.putFloat("band", view.getBand());
             if (hint != null) out.putString("hint", hint);
+            if (note != null) out.putString("note", note);
         }
     }
 
@@ -198,15 +200,13 @@ public class MainActivity extends Activity implements CountView.Listener {
         savedUri = null; // the picture changed, so the next save/share must render it again
     }
 
-    private void showHint(String text) {
+    /** text: the photo-quality tip (null = clean photo); ignored: what was skipped as print (or null). */
+    private void showHint(String text, String ignored) {
         hint = text;
-        if (text == null) {
-            hintView.setText("Clean photo: this count should be exact.");
-            hintView.setTextColor(Color.rgb(120, 220, 140));
-        } else {
-            hintView.setText(text);
-            hintView.setTextColor(Color.rgb(255, 190, 80));
-        }
+        note = ignored;
+        String line = text == null ? "Clean photo: this count should be exact." : text;
+        hintView.setText(ignored == null ? line : line + "\n" + ignored);
+        hintView.setTextColor(text == null ? Color.rgb(120, 220, 140) : Color.rgb(255, 190, 80));
         hintView.setVisibility(View.VISIBLE);
     }
 
@@ -218,7 +218,7 @@ public class MainActivity extends Activity implements CountView.Listener {
         String type = in.getType();
         if (Intent.ACTION_SEND.equals(in.getAction()) && type != null && type.startsWith("image/")) {
             Uri u = in.getParcelableExtra(Intent.EXTRA_STREAM); // photo shared to this app from the gallery
-            if (u != null) load(u, null, 0f, 0f, null);
+            if (u != null) load(u, null, 0f, 0f, null, null);
         }
     }
 
@@ -258,10 +258,10 @@ public class MainActivity extends Activity implements CountView.Listener {
     protected void onActivityResult(int req, int result, Intent data) {
         super.onActivityResult(req, result, data);
         if (req == REQ_PICK && result == RESULT_OK && data != null) {
-            load(data.getData(), null, 0f, 0f, null);
+            load(data.getData(), null, 0f, 0f, null, null);
         } else if (req == REQ_CAMERA) {
             if (result == RESULT_OK && cameraUri != null) {
-                load(cameraUri, null, 0f, 0f, null);
+                load(cameraUri, null, 0f, 0f, null, null);
             } else if (cameraUri != null) {
                 getContentResolver().delete(cameraUri, null, null); // cancelled: drop the empty entry
                 cameraUri = null;
@@ -273,7 +273,7 @@ public class MainActivity extends Activity implements CountView.Listener {
 
     /** Decodes and counts off the UI thread. With saved markers it only decodes (state restore). */
     private void load(final Uri uri, final float[] savedMarkers, final float savedRadius,
-                      final float savedBand, final String savedHint) {
+                      final float savedBand, final String savedHint, final String savedNote) {
         if (uri == null || busy) return;
         busy = true;
         sourceUri = uri;
@@ -299,10 +299,10 @@ public class MainActivity extends Activity implements CountView.Listener {
                             if (isDestroyed() || isFinishing()) return;
                             if (res != null) {
                                 view.setData(bmp, res);
-                                showHint(res.hint());
+                                showHint(res.hint(), res.ignoredNote());
                             } else {
                                 view.setRestored(bmp, savedRadius, savedBand, savedMarkers);
-                                showHint(savedHint);
+                                showHint(savedHint, savedNote);
                             }
                         }
                     });

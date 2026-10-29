@@ -35,6 +35,8 @@ public final class DalCounter {
         public float brightness;
         /** Number of markers flagged uncertain. */
         public int uncertainCount;
+        /** Pieces of printed text, lines and symbols that were recognised and not counted. */
+        public int ignoredCount;
 
         public int count() {
             return xs.length;
@@ -48,6 +50,12 @@ public final class DalCounter {
         /** True when the photo is good enough that the count can be trusted. */
         public boolean reliable() {
             return count() > 0 && backgroundFound && contrast >= 0.35f && noise <= 0.08f;
+        }
+
+        /** Tells the user that printed text / lines / symbols were skipped, or null when there were none. */
+        public String ignoredNote() {
+            if (ignoredCount == 0) return null;
+            return "Printed text, lines and symbols were ignored (" + ignoredCount + (ignoredCount == 1 ? " piece)." : " pieces).");
         }
 
         /** The single most useful tip for the user, or null when everything looks fine. */
@@ -85,7 +93,8 @@ public final class DalCounter {
         final int n = w * h;
 
         Seg seg = segment(argb, w, h, s);
-        boolean[] mask = open(seg.fg, w, h, 1);
+        boolean[] open = open(seg.fg, w, h, 1);
+        boolean[] mask = open.clone();
         fillHoles(mask, w, h);
 
         int[] lab = new int[n];
@@ -113,8 +122,12 @@ public final class DalCounter {
             }
         }
 
+        // Printed text, lines and symbols on the sheet are not grains: drop them before measuring grains.
+        res.ignoredCount = removeMarks(open, mask, lab, nLab, area, w, h, s);
+
         // Typical single-lentil area = median of the components that are not tiny crumbs.
-        double[] all = Arrays.copyOfRange(area, 1, nLab + 1);
+        double[] all = filterAbove(Arrays.copyOfRange(area, 1, nLab + 1), 0);
+        if (all.length == 0) return res;
         double med0 = median(all);
         double med = median(filterAbove(all, 0.5 * med0));
         float rad = (float) Math.sqrt(med / Math.PI);
@@ -318,6 +331,114 @@ public final class DalCounter {
         res.noise = seg.noise;
         res.brightness = seg.paperLum;
         return res;
+    }
+
+    // ---------------------------------------------------------------- printed text and symbols
+
+    /** A mark's strokes are at most this fraction of the typical grain thickness. */
+    public static float MARK_THIN = 0.5f;
+    /** Thin pieces at least this long for their width (area / (pi * halfWidth^2)) are strokes, not broken grains. */
+    public static float MARK_STROKE = 5f;
+    /** Thin pieces with at least this much enclosed hole are letters like o, e, 0, 8 or drawn circles. */
+    public static float MARK_HOLE = 0.2f;
+    /** Thin specks smaller than this fraction of a grain are bits of print or dust (broken grains are bigger). */
+    public static float MARK_SPECK = 0.1f;
+
+    /**
+     * Finds printed text, lines and symbols (letters, digits, underlines, arrows, ticks, boxes, rulers...) and
+     * removes them from the mask and the labels. Their strokes are much thinner than the grains in the same photo,
+     * while a grain, a broken piece or a pile of touching grains is as thick as a grain. Small thin pieces next to
+     * a mark (the rest of a word, i dots, full stops, hyphens) go with it.
+     * Returns the number of pieces removed; their area is set to 0.
+     */
+    private static int removeMarks(boolean[] open, boolean[] mask, int[] lab, int nLab, double[] area, int w, int h,
+                                   float s) {
+        final int n = w * h;
+        // Half-thickness of every piece, measured with its holes still open (an "o" is a thin ring, not a disc).
+        double[] du = edt(open, w, h);
+        double[] thick = new double[nLab + 1];
+        double[] inkArea = new double[nLab + 1];
+        for (int i = 0; i < n; i++) {
+            int l = lab[i];
+            if (l > 0 && open[i]) {
+                inkArea[l]++;
+                if (du[i] > thick[l]) thick[l] = du[i];
+            }
+        }
+        // Typical grain half-thickness: upper quartile of the pieces that are not crumbs, so that a page
+        // with many letters still measures the grains.
+        double med0 = median(Arrays.copyOfRange(area, 1, nLab + 1));
+        int nc = 0;
+        double[] tc = new double[nLab];
+        for (int l = 1; l <= nLab; l++) if (area[l] > 0.5 * med0) tc[nc++] = thick[l];
+        if (nc == 0) return 0;
+        tc = Arrays.copyOf(tc, nc);
+        Arrays.sort(tc);
+        double typical = tc[Math.min(nc - 1, (int) (0.75 * nc))];
+        if (typical < 2) return 0; // grains only a few pixels wide: strokes cannot be told apart
+        double grainArea = Math.PI * typical * typical;
+        double hairline = 3 * s; // printed strokes are a few pixels wide; no grain or broken piece is that thin
+
+        boolean[] thin = new boolean[nLab + 1];
+        boolean[] mark = new boolean[nLab + 1];
+        int marks = 0;
+        for (int l = 1; l <= nLab; l++) {
+            thin[l] = inkArea[l] > 0 && thick[l] < MARK_THIN * typical;
+            if (!thin[l]) continue;
+            double stroke = inkArea[l] / (Math.PI * thick[l] * thick[l]);
+            double hole = 1 - inkArea[l] / area[l];
+            if (stroke > MARK_STROKE || hole > MARK_HOLE || area[l] < MARK_SPECK * grainArea || thick[l] <= hairline) {
+                mark[l] = true;
+                marks++;
+            }
+        }
+        if (marks == 0) return 0;
+
+        // The rest of the same text: small thin pieces close to a mark, spreading letter by letter along a word.
+        // "Close" = bounding boxes less than 2.5 grain half-widths apart.
+        int[] minX = new int[nLab + 1], maxX = new int[nLab + 1], minY = new int[nLab + 1], maxY = new int[nLab + 1];
+        Arrays.fill(minX, Integer.MAX_VALUE);
+        Arrays.fill(minY, Integer.MAX_VALUE);
+        Arrays.fill(maxX, -1);
+        Arrays.fill(maxY, -1);
+        for (int i = 0; i < n; i++) {
+            int l = lab[i];
+            if (l == 0) continue;
+            int x = i % w, y = i / w;
+            if (x < minX[l]) minX[l] = x;
+            if (x > maxX[l]) maxX[l] = x;
+            if (y < minY[l]) minY[l] = y;
+            if (y > maxY[l]) maxY[l] = y;
+        }
+        int[] cand = new int[nLab];
+        int ncand = 0;
+        for (int l = 1; l <= nLab; l++) if (!mark[l] && thin[l] && area[l] < 0.35 * grainArea) cand[ncand++] = l;
+        int[] queue = new int[nLab];
+        int qn = 0;
+        for (int l = 1; l <= nLab; l++) if (mark[l]) queue[qn++] = l;
+        double near = 2.5 * typical;
+        for (int q = 0; q < qn && ncand > 0; q++) {
+            int m = queue[q];
+            for (int c = ncand - 1; c >= 0; c--) {
+                int l = cand[c];
+                double gx = Math.max(0, Math.max(minX[l] - maxX[m], minX[m] - maxX[l]));
+                double gy = Math.max(0, Math.max(minY[l] - maxY[m], minY[m] - maxY[l]));
+                if (gx * gx + gy * gy <= near * near) {
+                    mark[l] = true;
+                    marks++;
+                    queue[qn++] = l;
+                    cand[c] = cand[--ncand];
+                }
+            }
+        }
+        for (int i = 0; i < n; i++) {
+            if (lab[i] > 0 && mark[lab[i]]) {
+                lab[i] = 0;
+                mask[i] = false;
+            }
+        }
+        for (int l = 1; l <= nLab; l++) if (mark[l]) area[l] = 0;
+        return marks;
     }
 
     /** Sorts markers top-to-bottom in bands, then left-to-right, so numbers are easy to follow. */

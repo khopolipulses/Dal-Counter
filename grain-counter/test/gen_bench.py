@@ -9,7 +9,7 @@ import os
 import sys
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 COLORS = {
     "orange": (238, 142, 48),
@@ -41,6 +41,76 @@ GRAINS = {
 def blur(a, sigma):
     img = Image.fromarray(np.clip(a * 255, 0, 255).astype(np.uint8))
     return np.asarray(img.filter(ImageFilter.GaussianBlur(sigma))).astype(np.float32) / 255.0
+
+
+WORDS = ("MOONG DAL net wt 500g Best before 12/2027 Batch No. A-1734 PROTEIN 24g FIBRE "
+         "Toor Masoor Organic India www.example.com +91 98765 43210 Sample #7 count=? Lot 2 Rs.120").split()
+FONT_DIRS = ["/usr/share/fonts/truetype/dejavu/", "/Library/Fonts/", "C:/Windows/Fonts/"]
+
+
+def font(size, bold=False):
+    for d in FONT_DIRS:
+        try:
+            return ImageFont.truetype(d + ("DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"), int(size))
+        except OSError:
+            pass
+    return ImageFont.load_default(size=int(size))
+
+
+def draw_marks(rng, W, H, rad, s, kinds, ink_col):
+    """Printed text and symbols that must NOT be counted. Returns (ink alpha 0..1, keep-out mask for grains)."""
+    ink = Image.new("L", (W, H), 0)
+    d = ImageDraw.Draw(ink)
+    lw = lambda: max(1, int(rng.uniform(1.5, 4.5) * s))
+    boxes = []
+    if "text" in kinds:
+        for _ in range(9):
+            size = rad * rng.uniform(0.7, 1.6)
+            words = " ".join(rng.choice(WORDS, int(rng.integers(2, 6))))
+            x, y = rng.uniform(0.1, 0.6) * W, rng.uniform(0.1, 0.88) * H
+            d.text((x, y), words, fill=255, font=font(size))
+            boxes.append(d.textbbox((x, y), words, font=font(size)))
+    if "heading" in kinds:
+        size = rad * 2.6
+        x, y = 0.12 * W, 0.1 * H
+        d.text((x, y), "MASOOR DAL", fill=255, font=font(size, bold=True))
+        boxes.append(d.textbbox((x, y), "MASOOR DAL", font=font(size, bold=True)))
+    if "symbols" in kinds:
+        for _ in range(12):
+            cx, cy = rng.uniform(0.12, 0.88) * W, rng.uniform(0.12, 0.88) * H
+            r = rad * rng.uniform(1.0, 3.0)
+            t = int(rng.integers(0, 7))
+            if t == 0:    # straight line / underline
+                a = rng.uniform(0, np.pi)
+                d.line([cx - 2 * r * np.cos(a), cy - 2 * r * np.sin(a), cx + 2 * r * np.cos(a), cy + 2 * r * np.sin(a)], fill=255, width=lw())
+            elif t == 1:  # circle outline
+                d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=255, width=lw())
+            elif t == 2:  # box outline
+                d.rectangle([cx - r, cy - 0.7 * r, cx + r, cy + 0.7 * r], outline=255, width=lw())
+            elif t == 3:  # arrow
+                w_ = lw()
+                d.line([cx - 1.5 * r, cy, cx + 1.5 * r, cy], fill=255, width=w_)
+                d.line([cx + 1.5 * r, cy, cx + r, cy - 0.5 * r], fill=255, width=w_)
+                d.line([cx + 1.5 * r, cy, cx + r, cy + 0.5 * r], fill=255, width=w_)
+            elif t == 4:  # tick / check mark
+                w_ = lw()
+                d.line([cx - r, cy, cx - 0.3 * r, cy + 0.7 * r, cx + r, cy - 0.8 * r], fill=255, width=w_, joint="curve")
+            elif t == 5:  # plus / cross
+                w_ = lw()
+                d.line([cx - r, cy, cx + r, cy], fill=255, width=w_)
+                d.line([cx, cy - r, cx, cy + r], fill=255, width=w_)
+            else:         # ruler with ticks
+                w_ = lw()
+                d.line([cx - 2.5 * r, cy, cx + 2.5 * r, cy], fill=255, width=w_)
+                for k in range(11):
+                    tx = cx - 2.5 * r + k * 0.5 * r
+                    d.line([tx, cy, tx, cy - (0.6 if k % 5 == 0 else 0.3) * r], fill=255, width=max(1, w_ - 1))
+            boxes.append((cx - 2.6 * r, cy - 1.1 * r, cx + 2.6 * r, cy + 1.1 * r))
+    keep_out = Image.new("L", (W, H), 0)
+    kd = ImageDraw.Draw(keep_out)
+    for b in boxes:
+        kd.rectangle([b[0] - rad, b[1] - rad, b[2] + rad, b[3] + rad], fill=255)
+    return np.asarray(ink).astype(np.float32) / 255.0, np.asarray(keep_out) > 0
 
 
 def place(rng, n, rad, min_f, region, cluster):
@@ -98,6 +168,14 @@ def render(c):
         base = np.array(c.get("paper_color", (222, 224, 228)), np.float32) / 255.0
         img[paper] = base
 
+    # ---- printed text / symbols on the sheet (never counted)
+    marks_keep_out = None
+    if c.get("marks"):
+        ink, marks_keep_out = draw_marks(rng, W, H, rad, s, c["marks"], c.get("ink", (25, 25, 30)))
+        ink *= paper
+        ink_col = np.array(c.get("ink", (25, 25, 30)), np.float32) / 255.0
+        img = img * (1 - ink[..., None]) + ink_col * ink[..., None]
+
     # ---- illumination field
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
     shade = c.get("shade", 0.0)
@@ -108,6 +186,8 @@ def render(c):
     # ---- lentils
     region = ~np.asarray(Image.fromarray((~paper).astype(np.uint8) * 255).filter(ImageFilter.MaxFilter(15))) .astype(bool) \
         if not c.get("no_paper") else paper
+    if marks_keep_out is not None and not c.get("on_marks"):
+        region = region & ~marks_keep_out
     cl = None
     if c.get("cluster"):
         fx, fy, sx, sy = c["cluster"]
@@ -230,6 +310,17 @@ CASES = [
     ("G14_wheat_touching", dict(grain="wheat", n=200, min_f=1.75, cluster=(0.5, 0.5, 0.2, 0.22))),
     ("G15_rice_touching", dict(grain="rice", n=220, min_f=1.6, no_paper=True, table=(36, 38, 44), cluster=(0.5, 0.5, 0.2, 0.22))),
     ("G16_wheat_shaded_cast", dict(grain="wheat", n=150, min_f=2.2, shade=0.35, cast=(20, 6, -18))),
+    # ---- printed text and symbols on the sheet: they must be ignored
+    ("H01_text", dict(n=110, min_f=2.6, marks=("text",))),
+    ("H02_symbols", dict(n=110, min_f=2.6, marks=("symbols",))),
+    ("H03_text_symbols_heading", dict(n=100, min_f=2.6, marks=("text", "symbols", "heading"))),
+    ("H04_blue_ink", dict(n=110, min_f=2.6, marks=("text", "symbols"), ink=(30, 50, 150))),
+    ("H05_red_ink_red_dal", dict(n=110, min_f=2.6, dal="red", marks=("text", "symbols"), ink=(190, 30, 30))),
+    ("H06_black_sesame_text", dict(grain="sesame_black", n=200, min_f=2.4, marks=("text", "symbols"))),
+    ("H07_rice_text", dict(grain="rice", n=140, min_f=2.3, marks=("text", "symbols"))),
+    ("H08_wheat_text_touching", dict(grain="wheat", n=150, min_f=1.8, marks=("text", "symbols"), cluster=(0.5, 0.5, 0.2, 0.22))),
+    ("H09_grains_on_text", dict(n=110, min_f=2.6, marks=("text", "symbols"), on_marks=True)),
+    ("H10_mustard_text", dict(grain="mustard", n=250, min_f=3.0, marks=("text", "symbols"))),
 ]
 
 if __name__ == "__main__":
