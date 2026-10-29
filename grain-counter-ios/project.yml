@@ -1,0 +1,25 @@
+# XcodeGen spec: `xcodegen generate` turns this into GrainCounter.xcodeproj (done by the GitHub workflow).
+name: GrainCounter
+options:
+  bundleIdPrefix: com.dalcounter
+  deploymentTarget:
+    iOS: "15.0"
+targets:
+  GrainCounter:
+    type: application
+    platform: iOS
+    sources:
+      - App
+      - Core          # the counting engine, shared with the `swift test` package
+    settings:
+      base:
+        PRODUCT_NAME: GrainCounter
+        PRODUCT_BUNDLE_IDENTIFIER: com.dalcounter.graincounter
+        INFOPLIST_FILE: App/Info.plist
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic
+    scheme: {}

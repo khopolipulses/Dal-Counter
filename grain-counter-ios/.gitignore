@@ -1,0 +1,5 @@
+.build/
+build/
+Payload/
+*.ipa
+GrainCounter.xcodeproj/
