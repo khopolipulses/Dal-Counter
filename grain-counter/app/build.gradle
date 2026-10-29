@@ -1,0 +1,29 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.dalcounter'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.dalcounter'
+        minSdk 29          // Android 10+: scoped storage, so no storage permissions are needed
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    buildTypes {
+        release {
+            // no shrinking: nothing to gain on a ~100 KB app
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// Deliberately no dependencies: plain Android framework only, so the APK stays tiny.
