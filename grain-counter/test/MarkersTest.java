@@ -55,6 +55,21 @@ public class MarkersTest {
         e.set(new float[] {5}, new float[] {5}, null, 0f);
         check(e.size() == 1, "null uncertain array and zero band are safe");
 
+        // review: confirm a doubtful marker, find the next one, undo the confirmation
+        Markers v = new Markers();
+        v.set(new float[] {10, 20, 30}, new float[] {5, 5, 5}, new boolean[] {true, false, true}, 50f);
+        check(v.next(Markers.UNCERTAIN, 0) == 0 && v.next(Markers.UNCERTAIN, 1) == 2, "next() finds doubtful markers in order");
+        v.confirm(0);
+        check(v.get(0).kind == Markers.CONFIRMED && v.size() == 3, "confirm() keeps the marker and marks it checked");
+        check(v.next(Markers.UNCERTAIN, 0) == 2 && v.next(Markers.UNCERTAIN, 3) == 2, "next() skips checked ones and wraps");
+        check(v.undo() && v.get(0).kind == Markers.UNCERTAIN, "undo reverts a confirmation");
+        v.confirm(0);
+        v.confirm(2);
+        check(v.next(Markers.UNCERTAIN, 0) == -1, "next() returns -1 when everything is checked");
+        Markers vr = new Markers();
+        vr.restore(v.export(), 50f);
+        check(vr.get(2).kind == Markers.CONFIRMED, "checked state survives export/restore");
+
         // many edits keep undo order right
         Markers b = new Markers();
         b.set(new float[0], new float[0], null, 50f);

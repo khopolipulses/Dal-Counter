@@ -9,6 +9,7 @@ public final class Markers {
         case auto = 0       // found by the engine, looks certain
         case uncertain = 1  // found by the engine inside a touching/overlapping group
         case manual = 2     // added by the user
+        case confirmed = 3  // found by the engine and checked by the user
     }
 
     public final class Marker {
@@ -22,9 +23,11 @@ public final class Markers {
         }
     }
 
+    /// One undoable edit: an add, a remove, or a marker replaced by another (confirmed).
     private struct Op {
         let added: Bool
         let marker: Marker
+        var replaced: Marker? = nil
     }
 
     private var list: [Marker] = []
@@ -48,6 +51,11 @@ public final class Markers {
     public var count: Int { list.count }
 
     public subscript(i: Int) -> Marker { list[i] }
+
+    /// Current position of this marker (positions change when markers are added or removed).
+    public func index(of m: Marker) -> Int? {
+        return list.firstIndex { $0 === m }
+    }
 
     public func count(of kind: Kind) -> Int {
         return list.reduce(0) { $0 + ($1.kind == kind ? 1 : 0) }
@@ -80,13 +88,34 @@ public final class Markers {
         undoStack.append(Op(added: false, marker: m))
     }
 
+    /// Marks a marker as checked by the user (it is a real grain).
+    public func confirm(at index: Int) {
+        let old = list[index]
+        if old.kind == .confirmed { return }
+        let m = Marker(old.x, old.y, .confirmed)
+        list[index] = m
+        undoStack.append(Op(added: true, marker: m, replaced: old))
+    }
+
+    /// Index of the first marker of this kind at or after `from` (wrapping around), or -1.
+    public func next(_ kind: Kind, from: Int) -> Int {
+        let n = list.count
+        for k in 0..<n {
+            let i = ((from + k) % n + n) % n
+            if list[i].kind == kind { return i }
+        }
+        return -1
+    }
+
     public var canUndo: Bool { !undoStack.isEmpty }
 
     /// Reverts the last add or remove. Returns false if there was nothing to undo.
     @discardableResult
     public func undo() -> Bool {
         guard let op = undoStack.popLast() else { return false }
-        if op.added {
+        if let old = op.replaced {
+            if let i = list.firstIndex(where: { $0 === op.marker }) { list[i] = old }
+        } else if op.added {
             list.removeAll { $0 === op.marker }
         } else {
             list.append(op.marker)

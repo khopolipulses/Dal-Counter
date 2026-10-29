@@ -12,6 +12,7 @@ public final class Markers {
     public static final int AUTO = 0;       // found by the engine, looks certain
     public static final int UNCERTAIN = 1;  // found by the engine inside a touching/overlapping group
     public static final int MANUAL = 2;     // added by the user
+    public static final int CONFIRMED = 3;  // found by the engine and checked by the user
 
     public static final class Marker {
         public final float x, y;
@@ -24,13 +25,20 @@ public final class Markers {
         }
     }
 
+    /** One undoable edit: an add, a remove, or a marker replaced by another (confirmed). */
     private static final class Op {
         final boolean added;
         final Marker marker;
+        final Marker replaced;
 
         Op(boolean added, Marker marker) {
+            this(added, marker, null);
+        }
+
+        Op(boolean added, Marker marker, Marker replaced) {
             this.added = added;
             this.marker = marker;
+            this.replaced = replaced;
         }
     }
 
@@ -56,6 +64,12 @@ public final class Markers {
 
     public Marker get(int i) {
         return list.get(i);
+    }
+
+    /** Current position of this marker (positions change when markers are added or removed), or -1. */
+    public int indexOf(Marker m) {
+        for (int i = 0; i < list.size(); i++) if (list.get(i) == m) return i;
+        return -1;
     }
 
     public int countKind(int kind) {
@@ -92,6 +106,25 @@ public final class Markers {
         undoStack.add(new Op(false, m));
     }
 
+    /** Marks a marker as checked by the user (it is a real grain). */
+    public void confirm(int index) {
+        Marker old = list.get(index);
+        if (old.kind == CONFIRMED) return;
+        Marker m = new Marker(old.x, old.y, CONFIRMED);
+        list.set(index, m);
+        undoStack.add(new Op(true, m, old));
+    }
+
+    /** Index of the first marker of this kind at or after `from` (wrapping around), or -1. */
+    public int next(int kind, int from) {
+        int n = list.size();
+        for (int k = 0; k < n; k++) {
+            int i = ((from + k) % n + n) % n;
+            if (list.get(i).kind == kind) return i;
+        }
+        return -1;
+    }
+
     public boolean canUndo() {
         return !undoStack.isEmpty();
     }
@@ -100,7 +133,10 @@ public final class Markers {
     public boolean undo() {
         if (undoStack.isEmpty()) return false;
         Op op = undoStack.remove(undoStack.size() - 1);
-        if (op.added) {
+        if (op.replaced != null) {
+            int i = list.indexOf(op.marker);
+            if (i >= 0) list.set(i, op.replaced);
+        } else if (op.added) {
             list.remove(op.marker);
         } else {
             list.add(op.marker);

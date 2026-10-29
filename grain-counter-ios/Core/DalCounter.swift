@@ -47,6 +47,12 @@ public enum DalCounter {
             return "Printed text, lines and symbols were ignored (\(ignoredCount)\(ignoredCount == 1 ? " piece)." : " pieces).")"
         }
 
+        /// A problem with the photo itself (background, contrast, light), or nil when the photo is fine.
+        public var photoTip: String? {
+            guard let h = hint else { return nil }
+            return uncertainCount > 0 && h.hasPrefix("\(uncertainCount) grains touch") ? nil : h
+        }
+
         /// The single most useful tip for the user, or nil when everything looks fine.
         public var hint: String? {
             if count == 0 { return "No grains found. Use one plain background and good light." }
@@ -314,6 +320,10 @@ public enum DalCounter {
             let k = finalPk[l]
             pts[qi].uncertain = pts[qi].uncertain || (k >= 2 && ratio < 0.85 * Double(k)) || (k == 1 && ratio > 1.45 && !single[l])
         }
+        // Odd ones out: a lone grain that looks like no other grain in the photo (size, thickness, colour) is
+        // worth a look; real grains, even in a mix, come in groups that look alike.
+        let odd = oddOnesOut(argb, lab, d, nLab, area, finalPk, w, h)
+        for qi in pts.indices where odd[pts[qi].label] { pts[qi].uncertain = true }
         let band = max(1, 50 * s)
         pts = stableSorted(pts) { p, q in
             let rp = Int(p.y / band), rq = Int(q.y / band)
@@ -325,6 +335,51 @@ public enum DalCounter {
         res.uncertain = pts.map { $0.uncertain }
         res.uncertainCount = res.uncertain.filter { $0 }.count
         return res
+    }
+
+    /// For every blob holding exactly one marker: true when fewer than a few other such blobs look like it
+    /// (area within 1.6x, thickness within 1.4x, mean colour within 40). Skipped on very busy photos.
+    private static func oddOnesOut(_ argb: [UInt32], _ lab: [Int32], _ dist: [Double], _ nLab: Int, _ area: [Double],
+                                   _ markers: [Int], _ w: Int, _ h: Int) -> [Bool] {
+        var odd = [Bool](repeating: false, count: nLab + 1)
+        var ids: [Int] = []
+        for l in 1...nLab where markers[l] == 1 && area[l] > 0 { ids.append(l) }
+        let m = ids.count
+        if m < 8 || m > 4000 { return odd }
+        var thick = [Double](repeating: 0, count: nLab + 1), r = thick, g = thick, b = thick
+        for i in 0..<(w * h) {
+            let l = Int(lab[i])
+            if l == 0 || markers[l] != 1 { continue }
+            if dist[i] > thick[l] { thick[l] = dist[i] }
+            let (pr, pg, pb) = rgb(argb[i])
+            r[l] += Double(pr)
+            g[l] += Double(pg)
+            b[l] += Double(pb)
+        }
+        var la = [Double](repeating: 0, count: m), lt = la, cr = la, cg = la, cb = la
+        for k in 0..<m {
+            let l = ids[k]
+            la[k] = log(area[l])
+            lt[k] = log(max(0.5, thick[l]))
+            cr[k] = r[l] / area[l]
+            cg[k] = g[l] / area[l]
+            cb[k] = b[l] / area[l]
+        }
+        let sa = log(1.6), st = log(1.4)
+        let needed = max(2, Int(0.03 * Double(m)))
+        for k in 0..<m {
+            var alike = 0
+            var j = 0
+            while j < m && alike < needed {
+                if j != k && abs(la[j] - la[k]) <= sa && abs(lt[j] - lt[k]) <= st {
+                    let dr = cr[j] - cr[k], dg = cg[j] - cg[k], db = cb[j] - cb[k]
+                    if dr * dr + dg * dg + db * db <= 40 * 40 { alike += 1 }
+                }
+                j += 1
+            }
+            if alike < needed { odd[ids[k]] = true }
+        }
+        return odd
     }
 
     /// Blobs at least this convex (area / convex hull area) are one grain, however big.

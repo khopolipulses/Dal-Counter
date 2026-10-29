@@ -52,6 +52,22 @@ final class MarkersTests: XCTestCase {
         XCTAssertEqual(e.count, 1, "nil uncertain array and zero band are safe")
     }
 
+    func testReviewConfirmAndNext() {
+        let v = Markers()
+        v.set(xs: [10, 20, 30], ys: [5, 5, 5], uncertain: [true, false, true], band: 50)
+        XCTAssertTrue(v.next(.uncertain, from: 0) == 0 && v.next(.uncertain, from: 1) == 2, "next() finds doubtful markers in order")
+        v.confirm(at: 0)
+        XCTAssertTrue(v[0].kind == .confirmed && v.count == 3, "confirm() keeps the marker and marks it checked")
+        XCTAssertTrue(v.next(.uncertain, from: 0) == 2 && v.next(.uncertain, from: 3) == 2, "next() skips checked ones and wraps")
+        XCTAssertTrue(v.undo() && v[0].kind == .uncertain, "undo reverts a confirmation")
+        v.confirm(at: 0)
+        v.confirm(at: 2)
+        XCTAssertEqual(v.next(.uncertain, from: 0), -1, "next() returns -1 when everything is checked")
+        let vr = Markers()
+        vr.restore(v.export(), band: 50)
+        XCTAssertEqual(vr[2].kind, .confirmed, "checked state survives export/restore")
+    }
+
     func testManyEditsKeepUndoOrder() {
         let b = Markers()
         b.set(xs: [], ys: [], uncertain: nil, band: 50)

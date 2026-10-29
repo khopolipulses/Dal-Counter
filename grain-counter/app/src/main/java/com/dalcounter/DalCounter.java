@@ -58,6 +58,12 @@ public final class DalCounter {
             return "Printed text, lines and symbols were ignored (" + ignoredCount + (ignoredCount == 1 ? " piece)." : " pieces).");
         }
 
+        /** A problem with the photo itself (background, contrast, light), or null when the photo is fine. */
+        public String photoTip() {
+            String h = hint();
+            return h == null || (uncertainCount > 0 && h.startsWith(uncertainCount + " grains touch")) ? null : h;
+        }
+
         /** The single most useful tip for the user, or null when everything looks fine. */
         public String hint() {
             if (count() == 0) return "No grains found. Use one plain background and good light.";
@@ -323,6 +329,10 @@ public final class DalCounter {
             boolean unc = q[3] > 0 || (k >= 2 && ratio < 0.85 * k) || (k == 1 && ratio > 1.45 && !single[l]);
             q[3] = unc ? 1 : 0;
         }
+        // Odd ones out: a lone grain that looks like no other grain in the photo (size, thickness, colour) is
+        // worth a look; real grains, even in a mix, come in groups that look alike.
+        boolean[] odd = oddOnesOut(argb, lab, d, nLab, area, finalPk, w, h);
+        for (float[] q : pts) if (odd[(int) q[2]]) q[3] = 1;
         sortReadingOrder(pts, 50f * s);
         res.xs = new float[pts.size()];
         res.ys = new float[pts.size()];
@@ -338,6 +348,50 @@ public final class DalCounter {
         res.noise = seg.noise;
         res.brightness = seg.paperLum;
         return res;
+    }
+
+    /**
+     * For every blob holding exactly one marker: true when fewer than a few other such blobs look like it
+     * (area within 1.6x, thickness within 1.4x, mean colour within 40). Skipped on very busy photos.
+     */
+    private static boolean[] oddOnesOut(int[] argb, int[] lab, double[] dist, int nLab, double[] area, int[] markers,
+                                        int w, int h) {
+        boolean[] odd = new boolean[nLab + 1];
+        int[] ids = new int[nLab];
+        int m = 0;
+        for (int l = 1; l <= nLab; l++) if (markers[l] == 1 && area[l] > 0) ids[m++] = l;
+        if (m < 8 || m > 4000) return odd;
+        double[] thick = new double[nLab + 1], r = new double[nLab + 1], g = new double[nLab + 1], b = new double[nLab + 1];
+        for (int i = 0; i < w * h; i++) {
+            int l = lab[i];
+            if (l == 0 || markers[l] != 1) continue;
+            if (dist[i] > thick[l]) thick[l] = dist[i];
+            int p = argb[i];
+            r[l] += (p >> 16) & 255;
+            g[l] += (p >> 8) & 255;
+            b[l] += p & 255;
+        }
+        double[] la = new double[m], lt = new double[m], cr = new double[m], cg = new double[m], cb = new double[m];
+        for (int k = 0; k < m; k++) {
+            int l = ids[k];
+            la[k] = Math.log(area[l]);
+            lt[k] = Math.log(Math.max(0.5, thick[l]));
+            cr[k] = r[l] / area[l];
+            cg[k] = g[l] / area[l];
+            cb[k] = b[l] / area[l];
+        }
+        final double sa = Math.log(1.6), st = Math.log(1.4);
+        int needed = Math.max(2, (int) (0.03 * m));
+        for (int k = 0; k < m; k++) {
+            int alike = 0;
+            for (int j = 0; j < m && alike < needed; j++) {
+                if (j == k || Math.abs(la[j] - la[k]) > sa || Math.abs(lt[j] - lt[k]) > st) continue;
+                double dr = cr[j] - cr[k], dg = cg[j] - cg[k], db = cb[j] - cb[k];
+                if (dr * dr + dg * dg + db * db <= 40 * 40) alike++;
+            }
+            if (alike < needed) odd[ids[k]] = true;
+        }
+        return odd;
     }
 
     /** Blobs at least this convex (area / convex hull area) are one grain, however big. */
