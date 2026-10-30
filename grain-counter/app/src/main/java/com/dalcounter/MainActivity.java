@@ -20,6 +20,8 @@ import android.view.View;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.PathInterpolator;
 import android.widget.FrameLayout;
@@ -68,20 +70,33 @@ public class MainActivity extends Activity {
 
         void onInsets() {}
 
+        /** The app goes to the background (it may be killed after this). */
+        void onStop() {}
+
         void save(Bundle out) {}
+
+        /** True when Back is handled inside the screen (e.g. review mode). */
+        boolean handlesBack() {
+            return false;
+        }
     }
 
     private FrameLayout container;
     FrameLayout overlay;
     private final ArrayList<Screen> stack = new ArrayList<Screen>();
-    int insetTop, insetBottom;
+    int insetTop, insetBottom, insetLeft, insetRight;
     private boolean animating;
+    /** Set while the camera or picker is opening, so a double tap cannot open it twice. */
+    private long launchedAt;
+    private Object backCallback;
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         Ui.init(this);
         edgeToEdge();
+        ShareProvider.prune(this, ShareProvider.SHARE, 24L * 3600 * 1000);   // shared pictures: one day
+        ShareProvider.prune(this, ShareProvider.CAMERA, 3L * 24 * 3600 * 1000); // photos taken here: three days
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Ui.dark ? Color.BLACK : Color.rgb(250, 240, 230));
         container = new FrameLayout(this);
@@ -92,9 +107,20 @@ public class MainActivity extends Activity {
             @Override
             @SuppressWarnings("deprecation")
             public WindowInsets onApplyWindowInsets(View v, WindowInsets in) {
-                insetTop = in.getSystemWindowInsetTop();
-                insetBottom = in.getSystemWindowInsetBottom();
-                overlay.setPadding(0, insetTop, 0, 0);
+                if (Build.VERSION.SDK_INT >= 30) {
+                    android.graphics.Insets i = in.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                    insetTop = i.top;
+                    insetBottom = i.bottom;
+                    insetLeft = i.left;
+                    insetRight = i.right;
+                } else {
+                    insetTop = in.getSystemWindowInsetTop();
+                    insetBottom = in.getSystemWindowInsetBottom();
+                    insetLeft = in.getSystemWindowInsetLeft();
+                    insetRight = in.getSystemWindowInsetRight();
+                }
+                container.setPadding(insetLeft, 0, insetRight, 0);
+                overlay.setPadding(insetLeft, insetTop, insetRight, 0);
                 for (Screen s : stack) s.onInsets();
                 return in;
             }
@@ -150,6 +176,19 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        launchedAt = 0;
+    }
+
+    @Override
+    protected void onStop() {
+        Screen top = top();
+        if (top != null) top.onStop();
+        super.onStop();
+    }
+
+    @Override
     protected void onSaveInstanceState(Bundle out) {
         super.onSaveInstanceState(out);
         Screen top = top();
@@ -157,6 +196,10 @@ public class MainActivity extends Activity {
     }
 
     // ------------------------------------------------------------------ navigation
+
+    boolean inStack(Screen s) {
+        return stack.contains(s);
+    }
 
     Screen top() {
         return stack.isEmpty() ? null : stack.get(stack.size() - 1);
@@ -168,14 +211,23 @@ public class MainActivity extends Activity {
         push(s, true);
     }
 
-    private void push(final Screen s, boolean animated) {
-        if (animating) return;
+    private void push(final Screen s, final boolean animated) {
+        if (animating) { // a push during a transition is queued, never dropped
+            container.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    push(s, animated);
+                }
+            }, 120);
+            return;
+        }
         final Screen below = top();
         s.view = s.build();
         container.addView(s.view);
         stack.add(s);
         statusIcons(s.darkScreen());
         s.onShow();
+        updateBack();
         if (below == null) return;
         below.onHide();
         if (!animated) {
@@ -221,15 +273,49 @@ public class MainActivity extends Activity {
                 }).start();
         statusIcons(back.darkScreen());
         back.onShow();
+        updateBack();
+    }
+
+    /**
+     * Android 13+ back: a callback is registered only while the app itself handles Back (a screen to go back to,
+     * or review mode); otherwise the system closes the app with its predictive animation. Android 16 no longer
+     * calls onBackPressed for apps targeting it, so this is the path that matters there.
+     */
+    void updateBack() {
+        if (Build.VERSION.SDK_INT < 33) return;
+        Screen t = top();
+        boolean handle = stack.size() > 1 || (t != null && t.handlesBack());
+        OnBackInvokedDispatcher d = getOnBackInvokedDispatcher();
+        if (handle && backCallback == null) {
+            OnBackInvokedCallback cb = new OnBackInvokedCallback() {
+                @Override
+                public void onBackInvoked() {
+                    goBack();
+                }
+            };
+            d.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, cb);
+            backCallback = cb;
+        } else if (!handle && backCallback != null) {
+            d.unregisterOnBackInvokedCallback((OnBackInvokedCallback) backCallback);
+            backCallback = null;
+        }
+    }
+
+    /** Back inside the app: the screen first (leave review), then the stack. */
+    void goBack() {
+        Screen t = top();
+        if (t != null && t.onBack()) {
+            updateBack();
+            return;
+        }
+        if (stack.size() > 1) pop();
+        else finish();
     }
 
     @Override
     @SuppressWarnings("deprecation")
-    public void onBackPressed() {
-        Screen t = top();
-        if (t != null && t.onBack()) return;
-        if (stack.size() > 1) pop();
-        else super.onBackPressed();
+    public void onBackPressed() { // Android 10-12
+        goBack();
     }
 
     void toast(String message, boolean ok) {
@@ -244,11 +330,27 @@ public class MainActivity extends Activity {
         String type = in.getType();
         if (Intent.ACTION_SEND.equals(in.getAction()) && type != null && type.startsWith("image/")) {
             Uri u = in.getParcelableExtra(Intent.EXTRA_STREAM); // photo shared to this app from the gallery
-            if (u != null) push(new ResultScreen(this, u, null, null), stack.size() > 0);
+            // Only content:// from another app. A file:// Uri could point into this app's own private files.
+            if (isReadable(u)) push(new ResultScreen(this, u, null, null), stack.size() > 0);
+            else if (u != null) toast("That photo cannot be opened here", false);
         }
     }
 
+    /** Only content Uris are opened: other apps hand photos over that way, and it never reaches private files. */
+    static boolean isReadable(Uri u) {
+        return u != null && "content".equals(u.getScheme()) && u.getAuthority() != null;
+    }
+
+    /** True if the camera or picker was opened a moment ago (double tap). */
+    private boolean launching() {
+        long now = android.os.SystemClock.uptimeMillis();
+        if (launchedAt != 0 && now - launchedAt < 1500) return true;
+        launchedAt = now;
+        return false;
+    }
+
     void pickImage() {
+        if (launching()) return;
         Intent i = new Intent(Intent.ACTION_GET_CONTENT);
         i.setType("image/*");
         i.addCategory(Intent.CATEGORY_OPENABLE);
@@ -265,6 +367,7 @@ public class MainActivity extends Activity {
      */
     @SuppressWarnings("deprecation") // overridePendingTransition: the replacement needs API 34
     void openCamera() {
+        if (launching()) return;
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[] {Manifest.permission.CAMERA}, REQ_CAMERA_PERMISSION);
             return;
@@ -278,6 +381,7 @@ public class MainActivity extends Activity {
         super.onRequestPermissionsResult(req, permissions, results);
         if (req != REQ_CAMERA_PERMISSION) return;
         if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
+            launchedAt = 0;
             openCamera();
         } else {
             toast("Allow camera access to take a photo", false);
@@ -287,8 +391,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int req, int result, Intent data) {
         super.onActivityResult(req, result, data);
-        if ((req == REQ_PICK || req == REQ_CAMERA) && result == RESULT_OK && data != null && data.getData() != null) {
-            push(new ResultScreen(this, data.getData(), null, null));
+        launchedAt = 0;
+        if ((req == REQ_PICK || req == REQ_CAMERA) && result == RESULT_OK && data != null) {
+            if (isReadable(data.getData())) push(new ResultScreen(this, data.getData(), null, null));
+            else toast("That photo cannot be opened here", false);
         }
     }
 
@@ -296,18 +402,23 @@ public class MainActivity extends Activity {
 
     /** Decodes with EXIF rotation applied and the long side limited to MAX_SIDE. */
     Bitmap decode(Uri uri) throws IOException {
+        if (!isReadable(uri)) throw new IOException("not a content uri");
         ContentResolver cr = getContentResolver();
         BitmapFactory.Options bounds = new BitmapFactory.Options();
         bounds.inJustDecodeBounds = true;
         try (InputStream in = cr.openInputStream(uri)) {
             BitmapFactory.decodeStream(in, null, bounds);
         }
+        // Unknown or absurd sizes are refused before any pixel is decoded (corrupt files, decompression bombs).
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw new IOException("not an image");
+        if ((long) bounds.outWidth * bounds.outHeight > 400_000_000L) throw new IOException("image too large");
         int longSide = Math.max(bounds.outWidth, bounds.outHeight);
         int sample = 1;
         while (longSide / (sample * 2) >= MAX_SIDE) sample *= 2;
 
         BitmapFactory.Options opts = new BitmapFactory.Options();
         opts.inSampleSize = sample;
+        opts.inPreferredConfig = Bitmap.Config.ARGB_8888; // 8-bit pixels even for HDR photos
         Bitmap b;
         try (InputStream in = cr.openInputStream(uri)) {
             b = BitmapFactory.decodeStream(in, null, opts);
@@ -359,9 +470,22 @@ public class MainActivity extends Activity {
         return uri;
     }
 
+    /** Shares a picture through the app's private provider: nothing is written to the gallery. */
+    void shareBitmap(Bitmap bmp, String name, boolean png, String text) throws IOException {
+        String file = name + (png ? ".png" : ".jpg");
+        if (!ShareProvider.validName(file)) throw new IOException("bad name");
+        java.io.File f = new java.io.File(ShareProvider.dir(this, ShareProvider.SHARE), file);
+        try (OutputStream os = new java.io.FileOutputStream(f)) {
+            if (!bmp.compress(png ? Bitmap.CompressFormat.PNG : Bitmap.CompressFormat.JPEG, png ? 100 : 92, os)) {
+                throw new IOException("write failed");
+            }
+        }
+        share(ShareProvider.uri(ShareProvider.SHARE, file), text);
+    }
+
     void share(Uri uri, String text) {
         Intent s = new Intent(Intent.ACTION_SEND);
-        s.setType("image/*");
+        s.setType(getContentResolver().getType(uri) != null ? getContentResolver().getType(uri) : "image/*");
         s.putExtra(Intent.EXTRA_STREAM, uri);
         s.putExtra(Intent.EXTRA_TEXT, text);
         s.setClipData(ClipData.newRawUri("Counted image", uri));

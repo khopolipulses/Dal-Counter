@@ -1,3 +1,4 @@
+import AVFoundation
 import PhotosUI
 import UIKit
 import UniformTypeIdentifiers
@@ -11,6 +12,9 @@ final class HomeViewController: UIViewController {
     private let recentStack = UIStackView()
     private var cards: [UIView] = []
     private var revealed = false
+    #if DEBUG
+    private static var testImageOpened = false
+    #endif
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -76,6 +80,15 @@ final class HomeViewController: UIViewController {
             revealed = true
             Theme.reveal(cards)
         }
+        #if DEBUG
+        // UI tests only (never in the release build): "-uitest-image <path>" opens that photo once.
+        let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "-uitest-image"), i + 1 < args.count, !HomeViewController.testImageOpened {
+            HomeViewController.testImageOpened = true
+            let url = URL(fileURLWithPath: args[i + 1])
+            openResult { done in done((try? Data(contentsOf: url)).flatMap { ImageLoader.decode(data: $0) }) }
+        }
+        #endif
     }
 
     // ------------------------------------------------------------------ content
@@ -214,22 +227,30 @@ final class HomeViewController: UIViewController {
         }
         for e in entries {
             let row = HistoryRow(entry: e)
-            row.onTap = { [weak self] in self?.navigationController?.pushViewController(HistoryDetailViewController(entry: e), animated: true) }
+            row.onTap = { [weak self] in self?.push(HistoryDetailViewController(entry: e)) }
             recentStack.addArrangedSubview(row)
         }
     }
 
     // ------------------------------------------------------------------ navigation
 
+    /// Pushes only from the home screen itself: a double tap or a late picker callback cannot push twice.
+    private func push(_ vc: UIViewController) {
+        guard let nav = navigationController, nav.topViewController === self, presentedViewController == nil
+                || presentedViewController?.isBeingDismissed == true else { return }
+        nav.pushViewController(vc, animated: true)
+    }
+
     @objc private func openHistory() {
-        navigationController?.pushViewController(HistoryViewController(), animated: true)
+        push(HistoryViewController())
     }
 
     private func openResult(_ source: @escaping ResultViewController.Source) {
-        navigationController?.pushViewController(ResultViewController(source: source), animated: true)
+        push(ResultViewController(source: source))
     }
 
     private func pickImage() {
+        guard presentedViewController == nil else { return } // double tap
         var config = PHPickerConfiguration()  // no photo-library permission needed
         config.filter = .images
         config.selectionLimit = 1
@@ -243,6 +264,21 @@ final class HomeViewController: UIViewController {
             Toast.show("No camera available", symbol: "exclamationmark.triangle.fill", in: view)
             return
         }
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .denied, .restricted:
+            let a = UIAlertController(title: "Camera access is off",
+                                      message: "Allow Grain Counter to use the camera in Settings, or choose a photo instead.",
+                                      preferredStyle: .alert)
+            a.addAction(UIAlertAction(title: "Open Settings", style: .default) { _ in
+                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+            })
+            a.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+            present(a, animated: true)
+            return
+        default:
+            break
+        }
+        guard presentedViewController == nil else { return } // double tap
         let picker = UIImagePickerController()
         picker.sourceType = .camera
         picker.delegate = self

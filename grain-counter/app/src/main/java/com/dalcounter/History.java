@@ -13,9 +13,13 @@ import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import android.util.LruCache;
+
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.regex.Pattern;
 
 /** Past counts, kept only on this phone (app files/history): index.json plus <id>.jpg and <id>_t.jpg. */
 final class History {
@@ -51,9 +55,24 @@ final class History {
         return instance;
     }
 
+    /** Ids are UUIDs made by this app; anything else in the index is ignored and never used as a file name. */
+    private static final Pattern ID = Pattern.compile("[0-9a-fA-F-]{8,64}");
+
     private final File dir;
     private final List<Entry> entries = new ArrayList<Entry>();
-    private final HashMap<String, Bitmap> thumbs = new HashMap<String, Bitmap>();
+    /** Thumbnails kept in memory, at most ~8 MB. */
+    private final LruCache<String, Bitmap> thumbs = new LruCache<String, Bitmap>(8 * 1024 * 1024) {
+        @Override
+        protected int sizeOf(String key, Bitmap b) {
+            return b.getByteCount();
+        }
+    };
+    /** One worker for every file write and delete, so they always happen in the order they were asked for. */
+    private final ExecutorService io = Executors.newSingleThreadExecutor();
+
+    static boolean validId(String id) {
+        return id != null && ID.matcher(id).matches();
+    }
 
     private History(Context c) {
         dir = new File(c.getFilesDir(), "history");
@@ -62,6 +81,7 @@ final class History {
             JSONArray a = new JSONArray(new String(Files.readAllBytes(index().toPath()), StandardCharsets.UTF_8));
             for (int i = 0; i < a.length(); i++) {
                 JSONObject o = a.getJSONObject(i);
+                if (!validId(o.optString("id"))) continue;
                 entries.add(new Entry(o.getString("id"), o.getLong("date"), o.getInt("count"), o.optInt("toCheck"),
                         o.optInt("ignored")));
             }
@@ -88,6 +108,7 @@ final class History {
 
     /** Adds or replaces an entry and its picture (files are written on a background thread). */
     void save(Entry e, final Bitmap picture) {
+        if (!validId(e.id)) return;
         int at = -1;
         for (int i = 0; i < entries.size(); i++) if (entries.get(i).id.equals(e.id)) at = i;
         if (at >= 0) entries.set(at, e);
@@ -98,22 +119,29 @@ final class History {
         thumbs.put(e.id, thumb);
         final String id = e.id;
         final String json = toJson();
-        new Thread(new Runnable() {
+        io.execute(new Runnable() {
             @Override
             public void run() {
                 write(image(id), picture, 90);
                 write(thumbFile(id), thumb, 80);
                 writeText(index(), json);
             }
-        }).start();
+        });
     }
 
-    void delete(String id) {
+    void delete(final String id) {
+        if (!validId(id)) return;
         for (int i = entries.size() - 1; i >= 0; i--) if (entries.get(i).id.equals(id)) entries.remove(i);
         thumbs.remove(id);
-        image(id).delete();
-        thumbFile(id).delete();
-        writeText(index(), toJson());
+        final String json = toJson();
+        io.execute(new Runnable() { // after any pending save of the same entry, never before it
+            @Override
+            public void run() {
+                image(id).delete();
+                thumbFile(id).delete();
+                writeText(index(), json);
+            }
+        });
     }
 
     Bitmap thumbnail(String id) {
@@ -144,18 +172,23 @@ final class History {
     }
 
     private static void write(File f, Bitmap b, int quality) {
-        try (OutputStream os = new FileOutputStream(f)) {
+        File tmp = new File(f.getPath() + ".tmp");
+        try (OutputStream os = new FileOutputStream(tmp)) {
             b.compress(Bitmap.CompressFormat.JPEG, quality, os);
         } catch (Exception ignored) {
-            // a missing picture only shows as an empty thumbnail
+            return; // a missing picture only shows as an empty thumbnail
         }
+        if (!tmp.renameTo(f)) tmp.delete();
     }
 
+    /** Written to a temp file and renamed, so a crash mid-write never leaves a half index behind. */
     private static void writeText(File f, String s) {
-        try (OutputStream os = new FileOutputStream(f)) {
+        File tmp = new File(f.getPath() + ".tmp");
+        try (OutputStream os = new FileOutputStream(tmp)) {
             os.write(s.getBytes(StandardCharsets.UTF_8));
         } catch (Exception ignored) {
-            // keep the in-memory list; it is written again on the next save
+            return; // keep the in-memory list; it is written again on the next save
         }
+        if (!tmp.renameTo(f)) tmp.delete();
     }
 }

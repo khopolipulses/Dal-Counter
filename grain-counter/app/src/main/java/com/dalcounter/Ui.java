@@ -120,6 +120,7 @@ final class Ui {
     // ------------------------------------------------------------------ buttons
 
     /** Sinks a little under the finger and springs back, with a light tap. Keeps the view clickable. */
+    @android.annotation.SuppressLint("ClickableViewAccessibility") // returns false: the normal click still happens
     static void pressable(final View v) {
         v.setOnTouchListener(new View.OnTouchListener() {
             @Override

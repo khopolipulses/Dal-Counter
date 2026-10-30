@@ -174,7 +174,8 @@ public final class Markers {
             public int compare(Marker p, Marker q) {
                 int rp = (int) (p.y / b), rq = (int) (q.y / b);
                 if (rp != rq) return rp < rq ? -1 : 1;
-                return Float.compare(p.x, q.x);
+                int c = Float.compare(p.x, q.x);
+                return c != 0 ? c : Float.compare(p.y, q.y); // full order: numbers never swap after an undo
             }
         });
     }

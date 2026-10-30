@@ -2,8 +2,6 @@ package com.dalcounter;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
-import android.content.ContentResolver;
-import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
@@ -23,17 +21,20 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
-import android.provider.MediaStore;
 import android.util.Size;
 import android.view.Gravity;
 import android.view.OrientationEventListener;
 import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
+import android.view.WindowInsets;
+import android.os.Build;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
@@ -124,6 +125,28 @@ public class CameraActivity extends Activity {
         bar.addView(shutter, new FrameLayout.LayoutParams(dp(76), dp(76), Gravity.CENTER));
         root.addView(bar, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
+        final FrameLayout barRef = bar;
+        final TextView tipRef = tip;
+        // Edge to edge (always on Android 15+): keep the controls clear of the status and navigation bars.
+        root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override
+            @SuppressWarnings("deprecation")
+            public WindowInsets onApplyWindowInsets(View v, WindowInsets in) {
+                int top, bottom;
+                if (Build.VERSION.SDK_INT >= 30) {
+                    android.graphics.Insets i = in.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                    top = i.top;
+                    bottom = i.bottom;
+                } else {
+                    top = in.getSystemWindowInsetTop();
+                    bottom = in.getSystemWindowInsetBottom();
+                }
+                barRef.setPadding(dp(20), dp(28), dp(20), dp(36) + bottom);
+                ((FrameLayout.LayoutParams) tipRef.getLayoutParams()).topMargin = dp(16) + top;
+                tipRef.requestLayout();
+                return in;
+            }
+        });
         setContentView(root);
 
         // The screen stays portrait; the photo still gets the way the phone was held (flat = last known way).
@@ -341,39 +364,36 @@ public class CameraActivity extends Activity {
     }
 
     /** Runs on the camera thread: writes the JPEG to Pictures/GrainCounter and returns its Uri. */
+    /**
+     * Runs on the camera thread: keeps the JPEG in the app's private cache (it is not put in the gallery; the user
+     * saves the counted picture if they want it) and returns it as a content Uri.
+     */
     private void savePhoto(ImageReader r) {
-        Image img = r.acquireNextImage();
-        if (img == null) return;
         byte[] jpeg;
         try {
-            ByteBuffer buf = img.getPlanes()[0].getBuffer();
-            jpeg = new byte[buf.remaining()];
-            buf.get(jpeg);
-        } finally {
-            img.close();
-        }
-        ContentValues v = new ContentValues();
-        v.put(MediaStore.Images.Media.DISPLAY_NAME, "grains_" + System.currentTimeMillis() + ".jpg");
-        v.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
-        v.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/GrainCounter");
-        ContentResolver cr = getContentResolver();
-        Uri uri = null;
-        try {
-            uri = cr.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
-            if (uri == null) throw new Exception("insert failed");
-            OutputStream os = cr.openOutputStream(uri);
-            if (os == null) throw new Exception("open failed");
+            Image img = r.acquireNextImage(); // throws if the screen was closed meanwhile
+            if (img == null) return;
             try {
-                os.write(jpeg);
+                ByteBuffer buf = img.getPlanes()[0].getBuffer();
+                jpeg = new byte[buf.remaining()];
+                buf.get(jpeg);
             } finally {
-                os.close();
+                img.close();
             }
-        } catch (Exception e) {
-            if (uri != null) cr.delete(uri, null, null); // do not leave a broken file in the gallery
+        } catch (RuntimeException e) {
             captureFailed();
             return;
         }
-        final Uri done = uri;
+        String name = "grains_" + System.currentTimeMillis() + ".jpg";
+        File f = new File(ShareProvider.dir(this, ShareProvider.CAMERA), name);
+        try (OutputStream os = new FileOutputStream(f)) {
+            os.write(jpeg);
+        } catch (Exception e) {
+            f.delete();
+            captureFailed();
+            return;
+        }
+        final Uri done = ShareProvider.uri(ShareProvider.CAMERA, name);
         runOnUiThread(new Runnable() {
             @Override
             public void run() {

@@ -3,6 +3,12 @@ import UIKit
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        HistoryStore.clearShareFiles() // pictures handed to other apps last time are not kept
+        return true
+    }
+
+    func application(_ application: UIApplication,
                      configurationForConnecting session: UISceneSession,
                      options: UIScene.ConnectionOptions) -> UISceneConfiguration {
         let config = UISceneConfiguration(name: "Default", sessionRole: session.role)
@@ -29,6 +35,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         nav.navigationBar.compactAppearance = frosted
         w.rootViewController = nav
         w.tintColor = Theme.accent
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uitest-dark") { w.overrideUserInterfaceStyle = .dark }
+        #endif
         w.makeKeyAndVisible()
         window = w
     }

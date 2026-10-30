@@ -62,6 +62,8 @@ public class CountView extends View {
     private final Paint labelOutline = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint halo = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint sweep = new Paint();
+    private LinearGradient sweepShader;
+    private final Matrix sweepMove = new Matrix();
     private final Paint dim = new Paint();
     private final Matrix m = new Matrix();
     private final RectF photo = new RectF();
@@ -118,6 +120,7 @@ public class CountView extends View {
             @Override
             public boolean onSingleTapConfirmed(MotionEvent e) {
                 handleTap(e.getX(), e.getY());
+                performClick();
                 return true;
             }
 
@@ -320,6 +323,12 @@ public class CountView extends View {
     }
 
     @Override
+    public boolean performClick() {
+        return super.performClick();
+    }
+
+    @Override
+    @android.annotation.SuppressLint("ClickableViewAccessibility") // taps call performClick in onSingleTapConfirmed
     public boolean onTouchEvent(MotionEvent e) {
         scaleDetector.onTouchEvent(e);
         gestureDetector.onTouchEvent(e);
@@ -366,9 +375,14 @@ public class CountView extends View {
             canvas.drawRect(photo, dim);
             float period = 1800f, p = ((now - born) % (long) period) / period;
             float band = Ui.dp(60), y = photo.top - band + (photo.height() + 2 * band) * p;
-            sweep.setShader(new LinearGradient(0, y - band, 0, y + band,
-                    new int[] {Color.argb(0, 255, 255, 255), Color.argb(115, 255, 255, 255), Color.argb(0, 255, 255, 255)},
-                    null, Shader.TileMode.CLAMP));
+            if (sweepShader == null) { // made once, then moved down the photo
+                sweepShader = new LinearGradient(0, -band, 0, band,
+                        new int[] {Color.argb(0, 255, 255, 255), Color.argb(115, 255, 255, 255), Color.argb(0, 255, 255, 255)},
+                        null, Shader.TileMode.CLAMP);
+                sweep.setShader(sweepShader);
+            }
+            sweepMove.setTranslate(0, y);
+            sweepShader.setLocalMatrix(sweepMove);
             canvas.drawRect(photo.left, y - band, photo.right, y + band, sweep);
             canvas.restore();
             again = true;

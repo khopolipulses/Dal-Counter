@@ -41,7 +41,7 @@ final class ResultViewController: UIViewController {
     private let countingPill = GlassView(cornerRadius: 24, style: .systemThinMaterialDark)
 
     private var lastInsets = UIEdgeInsets.zero
-    private var countTimer: CADisplayLink?
+    private var countTimer: WeakLink?
     private var countFrom = 0, countTo = 0
     private var countStart: CFTimeInterval = 0
 
@@ -62,6 +62,8 @@ final class ResultViewController: UIViewController {
         view.backgroundColor = Theme.canvas
         buildUi()
         startCounting()
+        NotificationCenter.default.addObserver(self, selector: #selector(didEnterBackground),
+                                               name: UIApplication.didEnterBackgroundNotification, object: nil)
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -80,7 +82,15 @@ final class ResultViewController: UIViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        if isMovingFromParent { keepInHistory() }
+        if isMovingFromParent {
+            keepInHistory()
+            countTimer?.invalidate()
+            countView.stopAnimations()
+        }
+    }
+
+    @objc private func didEnterBackground() {
+        keepInHistory() // the app may be killed in the background: the count is already kept
     }
 
     // ------------------------------------------------------------------ layout
@@ -94,6 +104,8 @@ final class ResultViewController: UIViewController {
             self?.navigationController?.popViewController(animated: true)
         }
         shareButton = PressButton.round("square.and.arrow.up") { [weak self] in self?.share() }
+        backButton.accessibilityLabel = "Back"
+        shareButton.accessibilityLabel = "Share the counted picture"
 
         countLabel.font = Theme.rounded(44, .bold)
         countLabel.textColor = .white
@@ -123,6 +135,7 @@ final class ResultViewController: UIViewController {
         tipLabel.textColor = .white
         tipLabel.numberOfLines = 0
         let close = PressButton.round("xmark") { [weak self] in self?.setTip(visible: false) }
+        close.accessibilityLabel = "Hide tip"
         close.transform = CGAffineTransform(scaleX: 0.75, y: 0.75)
         let tipRow = UIStackView(arrangedSubviews: [tipIcon, tipLabel, close])
         tipRow.spacing = 10
@@ -318,12 +331,10 @@ final class ResultViewController: UIViewController {
             countLabel.text = "\(n)"
             return
         }
-        let l = CADisplayLink(target: self, selector: #selector(countTick))
-        l.add(to: .main, forMode: .common)
-        countTimer = l
+        countTimer = WeakLink(self) { $0.countTick() }
     }
 
-    @objc private func countTick() {
+    private func countTick() {
         let p = min(1, (CACurrentMediaTime() - countStart) / 0.8)
         let e = 1 - pow(1 - p, 3)
         countLabel.text = "\(countFrom + Int((Double(countTo - countFrom) * e).rounded()))"
@@ -358,6 +369,8 @@ final class ResultViewController: UIViewController {
         var unit = n == 1 ? "grain" : "grains"
         if res.ignoredCount > 0 { unit += " · \(res.ignoredCount) print marks ignored" }
         unitLabel.text = unit
+        countView.accessibilityLabel = "Photo with \(n) \(n == 1 ? "grain" : "grains") marked, \(toCheck) to check"
+        countLabel.accessibilityLabel = "\(n) \(n == 1 ? "grain" : "grains")"
         undoButton.isEnabled = m.canUndo
 
         var rc = reviewButton.configuration
@@ -538,8 +551,11 @@ final class ResultViewController: UIViewController {
     private func share() {
         guard result != nil, let png = countView.renderExport()?.pngData() else { return }
         let n = countView.markers.count
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("grain_count_\(n).png")
-        guard (try? png.write(to: url, options: .atomic)) != nil else { return }
+        guard let url = HistoryStore.shareFile(named: "grain_count_\(n).png"),
+              (try? png.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])) != nil else {
+            Toast.show("Could not share the picture", symbol: "exclamationmark.triangle.fill", in: view)
+            return
+        }
         let vc = UIActivityViewController(activityItems: [url, "Grain count: \(n)"], applicationActivities: nil)
         vc.popoverPresentationController?.sourceView = shareButton
         present(vc, animated: true)

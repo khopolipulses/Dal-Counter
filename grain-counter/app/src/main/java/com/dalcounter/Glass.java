@@ -36,6 +36,7 @@ final class Glass {
         private final RectF rect = new RectF();
         private final int[] here = new int[2], there = new int[2];
         private Bitmap small;
+        private Canvas smallCanvas;
         private int[] buf, tmp;
 
         Panel(Context c, View source, float radiusDp) {
@@ -66,6 +67,7 @@ final class Glass {
                     Shader.TileMode.CLAMP));
             int sw = Math.max(1, w / DOWN), sh = Math.max(1, h / DOWN);
             small = Bitmap.createBitmap(sw, sh, Bitmap.Config.ARGB_8888);
+            smallCanvas = new Canvas(small);
             buf = new int[sw * sh];
             tmp = new int[sw * sh];
         }
@@ -75,11 +77,13 @@ final class Glass {
             if (small != null && source != null && source.getWidth() > 0) {
                 getLocationInWindow(here);
                 source.getLocationInWindow(there);
-                Canvas sc = new Canvas(small);
+                Canvas sc = smallCanvas;
+                sc.save();
                 sc.drawColor(Ui.CANVAS);
                 sc.scale(1f / DOWN, 1f / DOWN);
                 sc.translate(there[0] - here[0], there[1] - here[1]);
                 source.draw(sc);
+                sc.restore();
                 blur(small, buf, tmp, 2);
                 c.save();
                 c.clipPath(clip);
@@ -139,6 +143,8 @@ final class Glass {
         private final float[][] spots = {{0.15f, 0.12f, 1.0f}, {0.9f, 0.3f, 0.9f}, {0.2f, 0.75f, 0.8f}, {0.85f, 0.9f, 1.0f}};
         private float t;
         private ValueAnimator clock;
+        private final RadialGradient[] shaders = new RadialGradient[4];
+        private final android.graphics.Matrix move = new android.graphics.Matrix();
 
         Mesh(Context c) {
             super(c);
@@ -173,6 +179,12 @@ final class Glass {
             base.setShader(new LinearGradient(0, 0, 0, h,
                     Ui.dark ? Color.rgb(26, 20, 18) : Color.rgb(255, 247, 237),
                     Ui.dark ? Color.rgb(10, 10, 13) : Color.rgb(250, 237, 224), Shader.TileMode.CLAMP));
+            int a = Ui.dark ? 77 : 107;
+            for (int i = 0; i < 4; i++) { // unit-size blobs, placed and scaled with a matrix while drawing
+                int col = tints[i];
+                shaders[i] = new RadialGradient(0, 0, 1, Color.argb(a, Color.red(col), Color.green(col), Color.blue(col)),
+                        Color.argb(0, Color.red(col), Color.green(col), Color.blue(col)), Shader.TileMode.CLAMP);
+            }
         }
 
         @Override
@@ -184,10 +196,11 @@ final class Glass {
                 float size = Math.max(w, h) * 0.42f * s[2];
                 float x = w * s[0] + (float) Math.sin(t + i * 1.7) * Ui.dp(40);
                 float y = h * s[1] + (float) Math.cos(t * (i % 2 == 0 ? 1 : -1) + i) * Ui.dp(50);
-                int col = tints[i];
-                int a = Ui.dark ? 77 : 107;
-                blob.setShader(new RadialGradient(x, y, size, Color.argb(a, Color.red(col), Color.green(col), Color.blue(col)),
-                        Color.argb(0, Color.red(col), Color.green(col), Color.blue(col)), Shader.TileMode.CLAMP));
+                if (shaders[i] == null) continue;
+                move.setScale(size, size);
+                move.postTranslate(x, y);
+                shaders[i].setLocalMatrix(move);
+                blob.setShader(shaders[i]);
                 c.drawCircle(x, y, size, blob);
             }
         }

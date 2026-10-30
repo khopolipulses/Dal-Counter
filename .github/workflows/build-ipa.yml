@@ -4,11 +4,16 @@ on:
   push:
     paths:
       - 'grain-counter-ios/**'
+      - 'grain-counter/app/src/main/java/com/dalcounter/DalCounter.java'
+      - 'grain-counter/app/src/main/java/com/dalcounter/Markers.java'
+      - 'grain-counter/test/Fuzz.java'
+      - 'testdata/**'
       - '.github/workflows/build-ipa.yml'
   workflow_dispatch:
 
 jobs:
   build:
+    name: Tests, Java/Swift parity, IPA, simulator UI tests
     runs-on: macos-15
     defaults:
       run:
@@ -16,15 +21,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Test the counting engine
-        run: swift test
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Engine tests (incl. 300-image fuzz)
+        run: FUZZ_OUT=$PWD/fuzz-swift.txt swift test
+
+      - name: Java and Swift engines give bit-identical results
+        run: |
+          mkdir -p /tmp/t
+          javac -d /tmp/t ../grain-counter/app/src/main/java/com/dalcounter/DalCounter.java \
+            ../grain-counter/app/src/main/java/com/dalcounter/Markers.java ../grain-counter/test/Fuzz.java
+          java -cp /tmp/t Fuzz 300 fuzz-java.txt
+          diff fuzz-java.txt fuzz-swift.txt && echo "parity: 300/300 identical"
 
       - name: Generate the Xcode project
         run: |
           brew install xcodegen
           xcodegen generate
 
-      - name: Build (unsigned)
+      - name: Build (unsigned release)
         run: |
           xcodebuild -project GrainCounter.xcodeproj -scheme GrainCounter -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
@@ -40,3 +58,28 @@ jobs:
         with:
           name: grain-counter-ipa
           path: grain-counter-ios/grain-counter.ipa
+
+      - name: UI tests on the simulator (flows, accessibility audit, screenshots)
+        run: |
+          set -o pipefail
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)['devices']
+          ios = sorted((k for k in d if 'iOS' in k), key=lambda k: [int(x) for x in k.split('iOS-')[-1].split('-')])
+          for k in reversed(ios):
+              for dev in d[k]:
+                  if dev['name'].startswith('iPhone') and 'Pro' in dev['name']:
+                      print(dev['udid']); sys.exit()
+          ")
+          echo "simulator: $UDID"
+          xcodebuild test -project GrainCounter.xcodeproj -scheme GrainCounter -destination "id=$UDID" \
+            -derivedDataPath build-test -resultBundlePath ui-tests.xcresult \
+            TEST_RUNNER_SCREENSHOT_DIR=$PWD/ios-screenshots | tail -40
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-simulator-screenshots
+          path: |
+            grain-counter-ios/ios-screenshots
+            grain-counter-ios/fuzz-swift.txt

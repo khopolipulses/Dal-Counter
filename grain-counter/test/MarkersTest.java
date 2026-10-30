@@ -79,5 +79,6 @@ public class MarkersTest {
         for (int i = 0; i < 40; i++) b.undo();
         check(left == 60 && b.size() == 100, "100 adds, 40 removes, 40 undos -> back to 100");
         System.out.println(fails == 0 ? "MARKERS: ALL PASSED" : "MARKERS: " + fails + " FAILED");
+        if (fails > 0) System.exit(1);
     }
 }

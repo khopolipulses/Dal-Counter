@@ -278,3 +278,31 @@ enum Toast {
         }, completion: { _ in glass.removeFromSuperview() })
     }
 }
+
+/// CADisplayLink keeps a strong reference to its target; this proxy breaks the cycle, so a screen that is closed
+/// mid-animation is freed instead of animating (and using memory) forever.
+final class WeakLink: NSObject {
+    private weak var target: AnyObject?
+    private let fire: (AnyObject) -> Void
+    private(set) var link: CADisplayLink!
+
+    init<T: AnyObject>(_ target: T, _ fire: @escaping (T) -> Void) {
+        self.target = target
+        self.fire = { fire($0 as! T) }
+        super.init()
+        link = CADisplayLink(target: self, selector: #selector(tick))
+        link.add(to: .main, forMode: .common)
+    }
+
+    @objc private func tick() {
+        guard let t = target else {
+            link.invalidate()
+            return
+        }
+        fire(t)
+    }
+
+    func invalidate() {
+        link.invalidate()
+    }
+}

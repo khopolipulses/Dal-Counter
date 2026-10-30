@@ -6,6 +6,7 @@ on:
 
 jobs:
   build:
+    name: Lint, tests, accuracy gate, APK
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -20,10 +21,25 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
+          gradle-version: '8.11.1'
 
-      - name: Build
-        run: gradle assembleDebug --no-daemon
+      - name: Android Lint (fails on any error) and build
+        run: gradle lintDebug assembleDebug --no-daemon
+
+      - name: Engine tests - robustness, marker edits, 300-image fuzz
+        run: |
+          mkdir -p /tmp/t
+          javac -d /tmp/t app/src/main/java/com/dalcounter/DalCounter.java app/src/main/java/com/dalcounter/Markers.java test/*.java
+          java -cp /tmp/t Robust
+          java -cp /tmp/t MarkersTest
+          java -cp /tmp/t Fuzz 300 fuzz-java.txt
+
+      - name: Accuracy gate (70 benchmark photos must not get worse)
+        run: |
+          pip install --quiet numpy pillow
+          python3 test/gen_bench.py /tmp/bench > /dev/null
+          java -cp /tmp/t Eval /tmp/bench 1280 | tee eval.txt
+          python3 test/accuracy_gate.py eval.txt 58 68
 
       - name: Name the APK
         run: cp app/build/outputs/apk/debug/app-debug.apk grain-counter.apk
@@ -32,3 +48,46 @@ jobs:
         with:
           name: grain-counter-apk
           path: grain-counter/grain-counter.apk
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-reports
+          path: |
+            grain-counter/app/build/reports/lint-results-debug.html
+            grain-counter/eval.txt
+            grain-counter/fuzz-java.txt
+
+  device:
+    name: Real device test (emulator)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: grain-counter-apk
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Use, attack and stress the app on Android 15
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back emulated
+          script: bash grain-counter/test/device-test.sh grain-counter.apk testdata device-screenshots
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-device-screenshots
+          path: device-screenshots

@@ -151,7 +151,7 @@ public final class Markers {
         list = DalCounter.stableSorted(list) { p, q in
             let rp = Int(p.y / b), rq = Int(q.y / b)
             if rp != rq { return rp < rq }
-            return p.x < q.x
+            return p.x != q.x ? p.x < q.x : p.y < q.y // full order: numbers never swap after an undo
         }
     }
 }

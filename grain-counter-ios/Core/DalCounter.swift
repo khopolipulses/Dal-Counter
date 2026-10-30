@@ -328,7 +328,7 @@ public enum DalCounter {
         pts = stableSorted(pts) { p, q in
             let rp = Int(p.y / band), rq = Int(q.y / band)
             if rp != rq { return rp < rq }
-            return p.x < q.x
+            return p.x != q.x ? p.x < q.x : p.y < q.y
         }
         res.xs = pts.map { $0.x }
         res.ys = pts.map { $0.y }

@@ -6,7 +6,6 @@ import android.content.DialogInterface;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
-import android.net.Uri;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -20,7 +19,6 @@ final class PictureScreen extends MainActivity.Screen {
     private final History.Entry entry;
     private FrameLayout root;
     private View back, actions, caption;
-    private Uri shared;
 
     PictureScreen(MainActivity app, History.Entry entry) {
         super(app);
@@ -45,10 +43,11 @@ final class PictureScreen extends MainActivity.Screen {
         Glass.Panel backPanel = new Glass.Panel(c, picture, 22);
         picture.addFollower(backPanel);
         backPanel.addView(Ui.icon(c, "back", Color.WHITE, 20), Ui.frame(Ui.dp(20), Ui.dp(20), Gravity.CENTER));
+        backPanel.setContentDescription("Back");
         backPanel.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                app.onBackPressed();
+                app.goBack();
             }
         });
         Ui.pressable(backPanel);
@@ -95,6 +94,7 @@ final class PictureScreen extends MainActivity.Screen {
 
     private static View button(Context c, String icon, View.OnClickListener click) {
         FrameLayout f = new FrameLayout(c);
+        f.setContentDescription(icon.equals("share") ? "Share" : "Delete");
         f.addView(Ui.icon(c, icon, Color.WHITE, 20), Ui.frame(Ui.dp(20), Ui.dp(20), Gravity.CENTER));
         f.setOnClickListener(click);
         Ui.pressable(f);
@@ -116,12 +116,9 @@ final class PictureScreen extends MainActivity.Screen {
 
     private void share() {
         try {
-            if (shared == null) {
-                Bitmap b = BitmapFactory.decodeFile(History.get(app).image(entry.id).getPath());
-                if (b == null) throw new Exception("missing");
-                shared = app.writeToGallery(b, "grain_count_" + entry.count + "_" + entry.date, false);
-            }
-            app.share(shared, "Grain count: " + entry.count);
+            Bitmap b = BitmapFactory.decodeFile(History.get(app).image(entry.id).getPath());
+            if (b == null) throw new Exception("missing");
+            app.shareBitmap(b, "grain_count_" + entry.count, false, "Grain count: " + entry.count);
         } catch (Throwable t) {
             app.toast("Could not share the picture", false);
         }
@@ -134,7 +131,7 @@ final class PictureScreen extends MainActivity.Screen {
                     @Override
                     public void onClick(DialogInterface d, int which) {
                         History.get(app).delete(entry.id);
-                        app.onBackPressed();
+                        app.goBack();
                     }
                 })
                 .setNegativeButton("Cancel", null)

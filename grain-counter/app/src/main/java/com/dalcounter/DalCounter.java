@@ -682,7 +682,8 @@ public final class DalCounter {
             public int compare(float[] p, float[] q) {
                 int rp = (int) (p[1] / b), rq = (int) (q[1] / b);
                 if (rp != rq) return rp < rq ? -1 : 1;
-                return Float.compare(p[0], q[0]);
+                int c = Float.compare(p[0], q[0]);
+                return c != 0 ? c : Float.compare(p[1], q[1]);
             }
         });
     }

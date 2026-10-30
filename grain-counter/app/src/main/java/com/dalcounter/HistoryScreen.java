@@ -41,7 +41,7 @@ final class HistoryScreen extends MainActivity.Screen {
         back.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                app.onBackPressed();
+                app.goBack();
             }
         });
         Ui.pressable(back);

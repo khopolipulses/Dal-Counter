@@ -41,5 +41,6 @@ public class Robust {
         run("huge 4000x3000 white", 4000, 3000, (x, y) -> rgb(235, 235, 235), 0);
         run("panorama 3200x400", 3200, 400, (x, y) -> rgb(235, 235, 235), 0);
         System.out.println(fails == 0 ? "ALL ROBUSTNESS CHECKS PASSED" : fails + " ROBUSTNESS FAILURES");
+        if (fails > 0) System.exit(1);
     }
 }

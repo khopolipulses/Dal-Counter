@@ -35,7 +35,7 @@ final class CountView: UIView {
     private var fitScale: CGFloat = 1
     private var lastSize = CGSize.zero
 
-    private var link: CADisplayLink?
+    private var link: WeakLink?
     private var appearStart: CFTimeInterval = 0
     private var glide: (fromScale: CGFloat, fromOffset: CGPoint, toScale: CGFloat, toOffset: CGPoint, start: CFTimeInterval)?
     private static let glideTime = 0.5
@@ -59,6 +59,9 @@ final class CountView: UIView {
         single.require(toFail: double)   // double tap zooms; it must not also add a grain
         addGestureRecognizer(single)
         addGestureRecognizer(double)
+        isAccessibilityElement = true
+        accessibilityTraits = .image
+        accessibilityLabel = "Photo"
     }
 
     required init?(coder: NSCoder) {
@@ -173,16 +176,23 @@ final class CountView: UIView {
 
     private func updateLink() {
         if animating && link == nil {
-            let l = CADisplayLink(target: self, selector: #selector(tick))
-            l.add(to: .main, forMode: .common)
-            link = l
+            link = WeakLink(self) { $0.tick() }
         } else if !animating, let l = link {
             l.invalidate()
             link = nil
         }
     }
 
-    @objc private func tick() {
+    /// Stops every animation (the screen is going away).
+    func stopAnimations() {
+        highlighted = nil
+        scanning = false
+        glide = nil
+        appearStart = 0
+        updateLink()
+    }
+
+    private func tick() {
         let now = CACurrentMediaTime()
         if let g = glide {
             let p = min(1, (now - g.start) / CountView.glideTime)

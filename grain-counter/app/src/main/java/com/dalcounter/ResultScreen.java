@@ -33,6 +33,8 @@ final class ResultScreen extends MainActivity.Screen {
     private DalCounter.Result result;
     private Uri savedUri;
     private boolean reviewedSome;
+    /** The screen was left; late results from the counting thread are dropped. */
+    private volatile boolean closed;
 
     private FrameLayout root;
     private CountView countView;
@@ -79,7 +81,7 @@ final class ResultScreen extends MainActivity.Screen {
         backButton = roundButton(c, "back", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                app.onBackPressed();
+                app.goBack();
             }
         });
         shareButton = roundButton(c, "share", new View.OnClickListener() {
@@ -88,6 +90,8 @@ final class ResultScreen extends MainActivity.Screen {
                 share();
             }
         });
+        backButton.setContentDescription("Back");
+        shareButton.setContentDescription("Share the counted picture");
 
         // top: big count, unit, status pill; tip banner under it
         topCard = panel(c, 26);
@@ -390,6 +394,7 @@ final class ResultScreen extends MainActivity.Screen {
                     app.runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
+                            if (closed) return;
                             countingPill.setVisibility(View.GONE);
                             unitText.setText("Could not read that photo");
                             app.toast("Could not read that photo", false);
@@ -401,7 +406,7 @@ final class ResultScreen extends MainActivity.Screen {
     }
 
     private void show(Bitmap bmp, DalCounter.Result res) {
-        if (app.isDestroyed()) return;
+        if (app.isDestroyed() || closed) return;
         result = res;
         countView.setScanning(false);
         countView.setData(bmp, res);
@@ -480,6 +485,8 @@ final class ResultScreen extends MainActivity.Screen {
         Drawable d = new Ui.Icon(icon, color);
         d.setBounds(0, 0, Ui.dp(14), Ui.dp(14));
         statusPill.setCompoundDrawables(d, null, null, null);
+        countView.setContentDescription("Photo with " + n + (n == 1 ? " grain" : " grains") + " marked, " + toCheck + " to check");
+        countText.setContentDescription(n + (n == 1 ? " grain" : " grains"));
     }
 
     private void statusTapped() {
@@ -529,6 +536,7 @@ final class ResultScreen extends MainActivity.Screen {
             }
         });
         reviewing = mk;
+        app.updateBack();
     }
 
     private void goTo(Markers.Marker mk) {
@@ -576,6 +584,7 @@ final class ResultScreen extends MainActivity.Screen {
 
     private void endReview() {
         reviewing = null;
+        app.updateBack();
         countView.setHighlighted(null);
         countView.setFitInsets(Ui.dp(8), lastTop, Ui.dp(8), lastBottom);
         countView.resetFit(true);
@@ -587,6 +596,11 @@ final class ResultScreen extends MainActivity.Screen {
             }
         }).start();
         updateStatus();
+    }
+
+    @Override
+    boolean handlesBack() {
+        return reviewing != null;
     }
 
     @Override
@@ -603,6 +617,12 @@ final class ResultScreen extends MainActivity.Screen {
     @Override
     void onHide() {
         keepInHistory();
+        if (!app.inStack(this)) closed = true; // popped (onHide also runs when a screen is pushed on top)
+    }
+
+    @Override
+    void onStop() {
+        keepInHistory(); // the app may be killed in the background: the count is already kept
     }
 
     @Override
@@ -647,9 +667,10 @@ final class ResultScreen extends MainActivity.Screen {
     private void share() {
         if (result == null) return;
         try {
-            app.share(render(), "Grain count: " + countView.getCount());
+            Bitmap out = countView.renderExport();
+            if (out == null) throw new Exception("render failed");
+            app.shareBitmap(out, "grain_count_" + countView.getCount(), true, "Grain count: " + countView.getCount());
         } catch (Throwable t) {
-            savedUri = null;
             app.toast("Could not share the picture", false);
         }
     }
