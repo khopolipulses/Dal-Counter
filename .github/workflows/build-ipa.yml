@@ -19,9 +19,9 @@ jobs:
       run:
         working-directory: grain-counter-ios
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
@@ -54,7 +54,7 @@ jobs:
           cp -R build/Build/Products/Release-iphoneos/GrainCounter.app Payload/
           zip -qr grain-counter.ipa Payload
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: grain-counter-ipa
           path: grain-counter-ios/grain-counter.ipa
@@ -72,11 +72,13 @@ jobs:
                       print(dev['udid']); sys.exit()
           ")
           echo "simulator: $UDID"
-          xcodebuild test -project GrainCounter.xcodeproj -scheme GrainCounter -destination "id=$UDID" \
-            -derivedDataPath build-test -resultBundlePath ui-tests.xcresult \
-            TEST_RUNNER_SCREENSHOT_DIR=$PWD/ios-screenshots | tail -40
+          # TEST_RUNNER_-prefixed environment variables reach the test process (minus the prefix).
+          TEST_RUNNER_SCREENSHOT_DIR="$PWD/ios-screenshots" xcodebuild test -project GrainCounter.xcodeproj \
+            -scheme GrainCounter -destination "id=$UDID" -derivedDataPath build-test \
+            -resultBundlePath ui-tests.xcresult | tail -40
+          ls ios-screenshots
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: ios-simulator-screenshots
