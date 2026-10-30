@@ -18,6 +18,9 @@ import java.util.List;
 final class HistoryScreen extends MainActivity.Screen {
 
     private LinearLayout content, list;
+    /** Rows are built in pages, so hundreds of saved counts still open instantly. */
+    private static final int PAGE = 60;
+    private int shown;
 
     HistoryScreen(MainActivity app) {
         super(app);
@@ -93,8 +96,17 @@ final class HistoryScreen extends MainActivity.Screen {
             list.addView(empty, Ui.matchWidth());
             return;
         }
-        List<View> shown = new ArrayList<View>();
-        for (int i = 0; i < entries.size(); i++) {
+        shown = 0;
+        addPage(entries);
+    }
+
+    private void addPage(final List<History.Entry> entries) {
+        int from = shown, to = Math.min(entries.size(), shown + PAGE);
+        if (list.getChildCount() > 0 && "more".equals(list.getChildAt(list.getChildCount() - 1).getTag())) {
+            list.removeViewAt(list.getChildCount() - 1);
+        }
+        List<View> fresh = new ArrayList<View>();
+        for (int i = from; i < to; i++) {
             final History.Entry e = entries.get(i);
             View row = HomeScreen.historyRow(app, e);
             row.setOnLongClickListener(new View.OnLongClickListener() {
@@ -108,9 +120,24 @@ final class HistoryScreen extends MainActivity.Screen {
             LinearLayout.LayoutParams lp = Ui.matchWidth();
             if (i > 0) lp.topMargin = Ui.dp(10);
             list.addView(row, lp);
-            if (i < 8) shown.add(row);
+            if (i - from < 8) fresh.add(row);
         }
-        Ui.reveal(shown, 0);
+        shown = to;
+        Ui.reveal(fresh, 0);
+        if (shown < entries.size()) {
+            TextView more = Ui.text(app, "Show more (" + (entries.size() - shown) + ")", 17, Ui.MEDIUM, Ui.ACCENT);
+            more.setGravity(Gravity.CENTER);
+            more.setPadding(0, Ui.dp(18), 0, Ui.dp(18));
+            more.setTag("more");
+            more.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    addPage(entries);
+                }
+            });
+            Ui.pressable(more);
+            list.addView(more, Ui.matchWidth());
+        }
     }
 
     private void confirmDelete(final History.Entry e) {

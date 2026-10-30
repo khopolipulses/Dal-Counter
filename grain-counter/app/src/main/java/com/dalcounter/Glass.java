@@ -37,6 +37,9 @@ final class Glass {
         private final int[] here = new int[2], there = new int[2];
         private Bitmap small;
         private Canvas smallCanvas;
+        /** The blurred picture is reused until the source changes or the panel moves over it. */
+        private boolean dirty = true;
+        private int lastX = Integer.MIN_VALUE, lastY = Integer.MIN_VALUE;
         private int[] buf, tmp;
 
         Panel(Context c, View source, float radiusDp) {
@@ -54,6 +57,12 @@ final class Glass {
 
         void setSource(View v) {
             source = v;
+            sourceChanged();
+        }
+
+        /** The view behind the glass drew something new. */
+        void sourceChanged() {
+            dirty = true;
             invalidate();
         }
 
@@ -68,6 +77,7 @@ final class Glass {
             int sw = Math.max(1, w / DOWN), sh = Math.max(1, h / DOWN);
             small = Bitmap.createBitmap(sw, sh, Bitmap.Config.ARGB_8888);
             smallCanvas = new Canvas(small);
+            dirty = true;
             buf = new int[sw * sh];
             tmp = new int[sw * sh];
         }
@@ -77,14 +87,8 @@ final class Glass {
             if (small != null && source != null && source.getWidth() > 0) {
                 getLocationInWindow(here);
                 source.getLocationInWindow(there);
-                Canvas sc = smallCanvas;
-                sc.save();
-                sc.drawColor(Ui.CANVAS);
-                sc.scale(1f / DOWN, 1f / DOWN);
-                sc.translate(there[0] - here[0], there[1] - here[1]);
-                source.draw(sc);
-                sc.restore();
-                blur(small, buf, tmp, 2);
+                int dx = there[0] - here[0], dy = there[1] - here[1];
+                if (dirty || dx != lastX || dy != lastY) blurSource(dx, dy);
                 c.save();
                 c.clipPath(clip);
                 c.drawBitmap(small, null, rect, paint);
@@ -96,6 +100,22 @@ final class Glass {
             c.drawRoundRect(rect, radius, radius, edge);
             rect.inset(-edge.getStrokeWidth() / 2, -edge.getStrokeWidth() / 2);
             super.onDraw(c);
+        }
+
+        private void blurSource(int dx, int dy) {
+            dirty = false;
+            lastX = dx;
+            lastY = dy;
+            {
+                Canvas sc = smallCanvas;
+                sc.save();
+                sc.drawColor(Ui.CANVAS);
+                sc.scale(1f / DOWN, 1f / DOWN);
+                sc.translate(dx, dy);
+                source.draw(sc);
+                sc.restore();
+                blur(small, buf, tmp, 2);
+            }
         }
 
         /** Two passes of a box blur (≈ gaussian) on a small bitmap. */

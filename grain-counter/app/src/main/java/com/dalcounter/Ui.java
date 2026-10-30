@@ -51,6 +51,7 @@ final class Ui {
 
     static void init(Context c) {
         density = c.getResources().getDisplayMetrics().density;
+        debuggable = (c.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         dark = (c.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
     }
 
@@ -61,6 +62,13 @@ final class Ui {
         String msg = t == null ? "" : t.getClass().getSimpleName() + ": "
                 + String.valueOf(t.getMessage()).replaceAll("(content|file)://\\S+", "<uri>").replaceAll("/data/\\S+", "<path>");
         android.util.Log.w(TAG, what + " " + msg);
+    }
+
+    private static boolean debuggable;
+
+    /** Debug builds only: a step-by-step trace for the device tests (never in release builds). */
+    static void trace(String what) {
+        if (debuggable) android.util.Log.i(TAG, what);
     }
 
     static int dp(float v) {

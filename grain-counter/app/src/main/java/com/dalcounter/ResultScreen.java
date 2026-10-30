@@ -469,6 +469,7 @@ final class ResultScreen extends MainActivity.Screen {
 
     private void show(Bitmap bmp, DalCounter.Result res) {
         if (app.isDestroyed() || closed) return;
+        Ui.trace("counted " + res.count() + ", " + res.uncertainCount + " to check");
         result = res;
         countView.setScanning(false);
         countView.setData(bmp, res);
@@ -520,7 +521,7 @@ final class ResultScreen extends MainActivity.Screen {
         Markers m = countView.markers();
         int n = m.size(), toCheck = m.countKind(Markers.UNCERTAIN);
         String unit = n == 1 ? "grain" : "grains";
-        if (result.ignoredCount > 0) unit += " · " + result.ignoredCount + " print marks ignored";
+        if (result.ignoredCount > 0) unit += " · printed text ignored";
         unitText.setText(unit);
         undoButton.setEnabled(m.canUndo());
         undoButton.setAlpha(m.canUndo() ? 1f : 0.35f);
@@ -575,6 +576,7 @@ final class ResultScreen extends MainActivity.Screen {
     // ------------------------------------------------------------------ review
 
     private void startReview() {
+        Ui.trace("review requested, " + countView.markers().countKind(Markers.UNCERTAIN) + " to check");
         Markers m = countView.markers();
         int first = m.next(Markers.UNCERTAIN, 0);
         if (first < 0) {

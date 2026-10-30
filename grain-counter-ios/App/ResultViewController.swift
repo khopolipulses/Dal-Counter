@@ -366,7 +366,7 @@ final class ResultViewController: UIViewController {
         let m = countView.markers
         let n = m.count, toCheck = m.count(of: .uncertain)
         var unit = n == 1 ? "grain" : "grains"
-        if res.ignoredCount > 0 { unit += " · \(res.ignoredCount) print marks ignored" }
+        if res.ignoredCount > 0 { unit += " · printed text ignored" }
         unitLabel.text = unit
         countView.accessibilityLabel = "Photo with \(n) \(n == 1 ? "grain" : "grains") marked, \(toCheck) to check"
         countLabel.accessibilityLabel = "\(n) \(n == 1 ? "grain" : "grains")"

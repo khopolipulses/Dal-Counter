@@ -360,7 +360,7 @@ public class CountView extends View {
         // frames tell them to refresh, otherwise they would keep redrawing each other.
         boolean screen = canvas.isHardwareAccelerated();
         if (bmp == null) {
-            if (screen) for (View f : followers) f.invalidate();
+            if (screen) refreshFollowers(false);
             return;
         }
         m.reset();
@@ -389,8 +389,25 @@ public class CountView extends View {
         } else {
             again |= drawMarkers(canvas, now);
         }
-        if (screen) for (View f : followers) f.invalidate();
+        if (screen) refreshFollowers(again);
         if (again && screen) postInvalidateOnAnimation();
+    }
+
+    private long followersRefreshed;
+
+    /**
+     * Tells the glass panels that the picture behind them changed. While animating this happens at most ~12 times
+     * a second (a blur does not need more, and re-blurring every frame starves slower phones); a still frame always
+     * refreshes, so the glass ends up exact.
+     */
+    private void refreshFollowers(boolean animating) {
+        long now = SystemClock.uptimeMillis();
+        if (animating && now - followersRefreshed < 80) return;
+        followersRefreshed = now;
+        for (View f : followers) {
+            if (f instanceof Glass.Panel) ((Glass.Panel) f).sourceChanged();
+            else f.invalidate();
+        }
     }
 
     /** Returns true while something is still animating. */

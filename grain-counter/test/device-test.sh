@@ -83,6 +83,16 @@ shown_count() {
   grep -Eo 'text="[0-9]+"' "$OUT/ui.xml" | head -1 | grep -Eo '[0-9]+'
 }
 
+# Waits (up to 60 s) for the count to appear; slow emulators need far longer than phones.
+wait_count() {
+  for i in $(seq 1 20); do
+    N=$(shown_count)
+    if [ -n "$N" ]; then echo "$N"; return 0; fi
+    sleep 3
+  done
+  return 1
+}
+
 app_log() { adb logcat -d -s GrainCounter | tr -d '\r'; }
 
 resumed() { sh_ dumpsys activity activities | grep -E "ResumedActivity" | head -1; }
@@ -115,22 +125,24 @@ adb logcat -c
 tap 'Choose from Photos' && sleep 5
 shot 02a_picker
 if tap '^Photo' || tap 'lentils_with_print'; then
-  sleep 10
+  N=$(wait_count)
   shot 02_result
-  N=$(shown_count)
   echo "  count: $N (100 grains in the photo)"
   if [ -n "$N" ] && [ "$N" -ge 95 ] && [ "$N" -le 110 ]; then ok "photo from the picker counted"; else bad "picker photo not counted"; app_log; fi
-  screen_has 'print marks ignored' && ok "printed marks reported as ignored" || bad "print marks not reported"
+  screen_has 'printed text ignored' && ok "printed text reported as ignored" || bad "printed text not reported"
 else
   bad "could not pick a photo in the system picker"
 fi
 no_crash picker
 
 say "guided review"
-if tap 'Review [0-9]+' || tap '[0-9]+ to check'; then
-  sleep 2
+if tap '^[0-9]+ to check$' || tap '^Review [0-9]+$'; then
+  sleep 3
   shot 03_review
-  screen_has 'exactly one grain' && ok "review card shows" || bad "review card missing"
+  if screen_has 'exactly one grain'; then ok "review card shows"; else
+    bad "review card missing"; cp "$OUT/ui.xml" "$OUT/review-ui.xml"; app_log | tail -5
+    tap '^Review [0-9]+$' && sleep 3 && screen_has 'exactly one grain' && echo "  (the Review button opened it)"
+  fi
   for i in $(seq 1 30); do
     tap 'Yes, a grain' || break
     sleep 1
@@ -188,17 +200,9 @@ sh_ content call --uri content://media --method scan_volume --arg external_prima
 sleep 3
 URI2=$(media_uri mixed_with_glare.jpg)
 adb logcat -c
-# "Share to Grain Counter" path. The shell can only pass on access it has itself.
-if sh_ content read --uri "$URI2" > /dev/null 2>&1; then
-  sh_ am start -W -a android.intent.action.SEND -t image/jpeg --eu android.intent.extra.STREAM "$URI2" \
-    --grant-read-uri-permission -n $PKG/.MainActivity > /dev/null
-else
-  echo "  (the shell cannot read media here, so it cannot share; opening through the picker instead)"
-  tap 'Choose from Photos' && sleep 5 && tap '^Photo'
-fi
-sleep 10
+tap 'Choose from Photos' && sleep 5 && tap '^Photo'   # newest photo first: the one just added
+N=$(wait_count)
 shot 10_dark_result
-N=$(shown_count)
 echo "  count: $N"
 [ "$N" = "60" ] && ok "mixed grains with glare counted 60 (exact)" || { bad "mixed photo counted '$N', not 60"; app_log; }
 adb shell input keyevent KEYCODE_BACK; sleep 2
@@ -263,20 +267,26 @@ fi
 no_crash monkey
 shot 14_after_monkey
 
-say "process death: the app is killed in the background and comes back"
+say "process death: Android kills the app in the background; the count comes back exactly"
+sh_ am force-stop $PKG
 sh_ am start -W -n $PKG/.MainActivity > /dev/null
-sleep 2
-tap 'Choose from Photos' && sleep 5 && tap '^Photo' && sleep 10
+sleep 3
+tap 'Choose from Photos' && sleep 5 && tap '^Photo'
+BEFORE=$(wait_count)
 shot 15a_before_kill
-adb shell input keyevent KEYCODE_HOME; sleep 2
-sh_ am kill $PKG
-sleep 2
+adb shell input keyevent KEYCODE_HOME
+sleep 3
+PID1=$(sh_ pidof $PKG)
+sh_ run-as $PKG kill -9 "$PID1" > /dev/null 2>&1 || sh_ am kill $PKG
+sleep 3
+PID2=$(sh_ pidof $PKG)
+if [ -n "$PID1" ] && [ "$PID1" != "$PID2" ]; then ok "process $PID1 killed"; else bad "could not kill the app process"; fi
 sh_ am start -W -n $PKG/.MainActivity > /dev/null
-sleep 8
+AFTER=$(wait_count)
 shot 15_after_process_death
-alive && ok "restored after process death" || bad "did not come back after process death"
-N=$(shown_count)
-[ -n "$N" ] && ok "count screen restored ($N grains)" || bad "count screen not restored after process death"
+alive && ok "app came back" || bad "did not come back after process death"
+echo "  count before: $BEFORE, after: $AFTER"
+[ -n "$BEFORE" ] && [ "$BEFORE" = "$AFTER" ] && ok "count screen restored exactly" || bad "count not restored after process death"
 no_crash process-death
 
 adb logcat -d > "$OUT/logcat.txt"

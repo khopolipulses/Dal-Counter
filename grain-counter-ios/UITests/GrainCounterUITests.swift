@@ -69,7 +69,7 @@ final class GrainCounterUITests: XCTestCase {
         let app = launch(image: "lentils_with_print")
         let n = waitForCount(app)
         XCTAssertTrue((95...110).contains(n), "lentils_with_print counted \(n) (100 grains)")
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'print marks ignored'")).firstMatch.exists,
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'printed text ignored'")).firstMatch.exists,
                       "printed marks not reported as ignored")
         snap("02_result")
         try audit(app)

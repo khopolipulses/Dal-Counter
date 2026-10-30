@@ -16,7 +16,7 @@ The only permission is the camera (asked the first time you press **Camera**).
   in Pictures/GrainCounter when you want it.
 - Best photo: grains spread out, one plain background (any colour that differs from the grains), even light, taken from above.
 - Printed text, lines and symbols on the sheet or packet (labels, numbers, underlines, arrows, ticks, boxes, rulers)
-  are recognised and **not counted**; the line under the count says how many pieces were ignored.
+  are recognised and **not counted**; the line under the count says when printed text was ignored.
   Phone camera watermarks in gallery photos ("Shot on Redmi ...", "AI QUAD CAMERA", phone model + lens frame,
   date stamps, small brand logos) are ignored the same way.
 - **Mixed grains** work: wheat, round seeds, lentils, beans... in one photo are each counted once (a big grain is

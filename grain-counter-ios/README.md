@@ -19,7 +19,7 @@ choose your team under *Signing & Capabilities*, plug in the phone and press Run
   "Shot on ..." watermark, date stamp or frame still count correctly, as the watermark is ignored.
 - Best photo: grains spread out, one plain background (any colour that differs from the grains), even light, taken from above.
 - Printed text, lines and symbols on the sheet or packet (labels, numbers, underlines, arrows, ticks, boxes, rulers)
-  are recognised and **not counted**; the line under the count says how many pieces were ignored.
+  are recognised and **not counted**; the line under the count says when printed text was ignored.
 - **Mixed grains** work: wheat, round seeds, lentils, beans... in one photo are each counted once (a big grain is
   not split just because it is bigger than the others).
 - **Light reflections** (flash, lamp or window glare on a glossy white table) are ignored.
