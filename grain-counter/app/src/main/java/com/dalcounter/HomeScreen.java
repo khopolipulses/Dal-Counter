@@ -71,13 +71,26 @@ final class HomeScreen extends MainActivity.Screen {
             content.addView(cards.get(i), p);
             cards.get(i).setAlpha(0f);
         }
+        content.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+            @Override
+            public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
+                if (r - l != or - ol) v.post(new Runnable() { // width changed (rotation, unfold)
+                    @Override
+                    public void run() {
+                        onInsets();
+                    }
+                });
+            }
+        });
         onInsets();
         return root;
     }
 
     @Override
     void onInsets() {
-        if (content != null) content.setPadding(Ui.dp(20), app.insetTop + Ui.dp(12), Ui.dp(20), app.insetBottom + Ui.dp(32));
+        if (content == null) return;
+        int side = Ui.columnPadding(content.getWidth() > 0 ? content.getWidth() : app.getResources().getDisplayMetrics().widthPixels);
+        content.setPadding(side, app.insetTop + Ui.dp(12), side, app.insetBottom + Ui.dp(32));
     }
 
     @Override

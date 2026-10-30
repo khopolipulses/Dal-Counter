@@ -12,7 +12,8 @@ The only permission is the camera (asked the first time you press **Camera**).
 ## Use
 - Home has **Take Photo** and **Choose from Photos**, your recent counts and tips; or Share a photo from your gallery to Grain Counter.
 - **Camera** is the app's own camera, not the phone's camera app, so photos never get a "Shot on ..." watermark,
-  date stamp or frame. Photos are saved to Pictures/GrainCounter.
+  date stamp or frame. The photo stays private to the app (deleted after 3 days); **Save** puts the counted picture
+  in Pictures/GrainCounter when you want it.
 - Best photo: grains spread out, one plain background (any colour that differs from the grains), even light, taken from above.
 - Printed text, lines and symbols on the sheet or packet (labels, numbers, underlines, arrows, ticks, boxes, rulers)
   are recognised and **not counted**; the line under the count says how many pieces were ignored.
@@ -25,7 +26,7 @@ The only permission is the camera (asked the first time you press **Camera**).
 - Tap an empty spot to add a missed grain, tap a ring to remove one. **Undo** reverts. Pinch or double tap to zoom.
 - The pill under the count says *Looks exact*, *N to check* or *Checked by you*; a tip appears when the photo itself could be better.
 - **History** keeps every count on the phone (thumbnail, number, date); open one to zoom, share or delete it.
-- **Save** writes a numbered PNG to Pictures/GrainCounter, **Share** sends it anywhere.
+- **Save** writes a numbered PNG to Pictures/GrainCounter. **Share** sends it anywhere without adding it to the gallery.
 
 ## Getting an exact count
 1. Take or choose a photo. The count appears in a second; every ring is one grain.
@@ -44,6 +45,29 @@ Apple-style: large titles, frosted glass cards and toolbars over a softly drifti
 under floating glass controls, spring animations (markers pop in, the count counts up, review glides from grain to grain),
 haptics, light and dark mode. Glass over the photo is a live blur drawn by the app, so it works on every Android version;
 no libraries are used.
+
+## Privacy and security
+- No internet permission: the app cannot send anything anywhere. Counting happens entirely on the phone.
+- Only the camera permission is asked for (first time **Camera** is used). Photos are picked with the system picker.
+- Counts, pictures and temporary files live in the app's private storage and are excluded from cloud backup and from
+  transfer to a new phone.
+- Photos shared into the app are opened only through content Uris; `file://` Uris (which could point at the app's
+  own private files) are refused, and images with unreadable or absurd dimensions are rejected before decoding.
+- Sharing uses a private, read-only provider that serves exactly one temporary file per permission grant; file names
+  are validated and paths canonicalised, so crafted Uris cannot reach other files. The camera screen and the
+  provider are not exported.
+
+## Testing (runs in CI on every push)
+- **Android Lint** must report no errors.
+- **Engine tests**: `Robust` (degenerate images), `MarkersTest`, and `Fuzz` - 300 pathological images (1-pixel strips,
+  noise, flat colours, checkerboards, discs with strokes and glare) that must never crash or put a marker outside the
+  image, plus thousands of random add/remove/confirm/undo edits where undo must restore the exact previous state.
+- **Accuracy gate**: the 70 benchmark photos of `gen_bench.py` must stay at least 58 exact and 68 within +-2.
+- **Java/Swift parity**: the iOS engine must give bit-identical results to this one on the fuzz images.
+- **Device test** (`test/device-test.sh`, Android 15 emulator): shares a photo in, reviews it, checks History,
+  takes a picture with the camera, dark mode, rotation, hostile intents (`file://` into private files, junk
+  intents, reading the private provider, starting the camera screen from outside), 4000 random monkey events and a
+  process kill; fails on any crash or ANR. Screenshots are uploaded as `android-device-screenshots`.
 
 ## Code
 Screens: `HomeScreen`, `ResultScreen` (count + review), `HistoryScreen`, `PictureScreen`, hosted by `MainActivity`

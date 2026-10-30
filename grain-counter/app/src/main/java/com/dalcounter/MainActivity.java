@@ -332,7 +332,10 @@ public class MainActivity extends Activity {
             Uri u = in.getParcelableExtra(Intent.EXTRA_STREAM); // photo shared to this app from the gallery
             // Only content:// from another app. A file:// Uri could point into this app's own private files.
             if (isReadable(u)) push(new ResultScreen(this, u, null, null), stack.size() > 0);
-            else if (u != null) toast("That photo cannot be opened here", false);
+            else if (u != null) {
+                Ui.warn("refused shared Uri with scheme " + u.getScheme(), null);
+                toast("That photo cannot be opened here", false);
+            }
         }
     }
 

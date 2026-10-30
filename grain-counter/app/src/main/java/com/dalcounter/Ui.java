@@ -54,6 +54,15 @@ final class Ui {
         dark = (c.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
     }
 
+    static final String TAG = "GrainCounter";
+
+    /** Logs a problem without personal data: content Uris and file paths are replaced. */
+    static void warn(String what, Throwable t) {
+        String msg = t == null ? "" : t.getClass().getSimpleName() + ": "
+                + String.valueOf(t.getMessage()).replaceAll("(content|file)://\\S+", "<uri>").replaceAll("/data/\\S+", "<path>");
+        android.util.Log.w(TAG, what + " " + msg);
+    }
+
     static int dp(float v) {
         return Math.round(v * density);
     }
@@ -219,6 +228,11 @@ final class Ui {
         return new FrameLayout.LayoutParams(w, h, gravity);
     }
 
+    /** Side padding that keeps a column readable on tablets and unfolded phones (at most 640 dp wide). */
+    static int columnPadding(int width) {
+        return Math.max(dp(20), (width - dp(640)) / 2);
+    }
+
     // ------------------------------------------------------------------ motion
 
     static final TimeInterpolator SPRING = new OvershootInterpolator(0.9f);
@@ -235,7 +249,7 @@ final class Ui {
     }
 
     /** A short message in a glass capsule that slides down and fades away (like a system HUD). */
-    static void toast(final FrameLayout overlay, String message, boolean ok) {
+    static void toast(final FrameLayout overlay, String message, final boolean ok) {
         Context c = overlay.getContext();
         final LinearLayout pill = row(c, Gravity.CENTER_VERTICAL);
         pill.setBackground(fill(dark ? Color.argb(235, 44, 44, 48) : Color.argb(240, 255, 255, 255), 22));
@@ -258,7 +272,7 @@ final class Ui {
                 .withEndAction(new Runnable() {
                     @Override
                     public void run() {
-                        pill.animate().alpha(0f).translationY(-dp(20)).setStartDelay(2000).setDuration(300)
+                        pill.animate().alpha(0f).translationY(-dp(20)).setStartDelay(ok ? 2000 : 3500).setDuration(300)
                                 .withEndAction(new Runnable() {
                                     @Override
                                     public void run() {

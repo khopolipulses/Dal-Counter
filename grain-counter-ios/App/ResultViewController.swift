@@ -73,9 +73,8 @@ final class ResultViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        // Keep the edge swipe back working with the bar hidden; it wins over panning the photo at the edge.
+        // The edge swipe back (see SwipeBack) wins over panning the photo at the very edge.
         if let pop = navigationController?.interactivePopGestureRecognizer {
-            pop.delegate = nil
             countView.panGesture.require(toFail: pop)
         }
     }

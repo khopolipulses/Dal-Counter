@@ -17,8 +17,20 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 }
 
+/// Swipe-back works on every pushed screen (also where the bar is hidden) and never on the first screen, where an
+/// edge swipe with nothing to go back to would leave the navigation stuck.
+final class SwipeBack: NSObject, UIGestureRecognizerDelegate {
+    weak var nav: UINavigationController?
+
+    func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        guard let nav = nav else { return false }
+        return nav.viewControllers.count > 1 && nav.transitionCoordinator == nil
+    }
+}
+
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
+    private let swipeBack = SwipeBack()
 
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options: UIScene.ConnectionOptions) {
         guard let ws = scene as? UIWindowScene else { return }
@@ -33,6 +45,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         nav.navigationBar.scrollEdgeAppearance = clear
         nav.navigationBar.standardAppearance = frosted
         nav.navigationBar.compactAppearance = frosted
+        swipeBack.nav = nav
+        nav.interactivePopGestureRecognizer?.delegate = swipeBack
         w.rootViewController = nav
         w.tintColor = Theme.accent
         #if DEBUG

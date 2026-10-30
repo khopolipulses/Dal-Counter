@@ -28,6 +28,9 @@ import java.util.UUID;
 final class ResultScreen extends MainActivity.Screen {
 
     private final Uri uri;
+    /** A private, lossless copy of the decoded photo: restoring after the app was killed never needs the
+     *  original's (temporary) access permission, and recounting it gives exactly the same result. */
+    private volatile Uri restoreUri;
     private final float[] savedMarkers;
     private final String historyId;
     private DalCounter.Result result;
@@ -372,6 +375,7 @@ final class ResultScreen extends MainActivity.Screen {
             public void run() {
                 try {
                     final Bitmap bmp = app.decode(uri);
+                    keepPrivateCopy(bmp);
                     final int w = bmp.getWidth(), h = bmp.getHeight();
                     final int[] px = new int[w * h];
                     bmp.getPixels(px, 0, w, 0, 0, w, h);
@@ -391,18 +395,76 @@ final class ResultScreen extends MainActivity.Screen {
                         }
                     }, wait);
                 } catch (Throwable t) { // includes OutOfMemoryError on huge photos
+                    Ui.warn("could not read photo:", t);
                     app.runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
                             if (closed) return;
-                            countingPill.setVisibility(View.GONE);
-                            unitText.setText("Could not read that photo");
-                            app.toast("Could not read that photo", false);
+                            showError();
                         }
                     });
                 }
             }
         }).start();
+    }
+
+    private void keepPrivateCopy(Bitmap bmp) {
+        if (ShareProvider.AUTHORITY.equals(uri.getAuthority())) {
+            restoreUri = uri; // already private (camera photo or an earlier copy)
+            return;
+        }
+        String name = "src_" + historyId + ".png";
+        if (!ShareProvider.validName(name)) return;
+        java.io.File f = new java.io.File(ShareProvider.dir(app, ShareProvider.CAMERA), name);
+        try (java.io.OutputStream os = new java.io.FileOutputStream(f)) {
+            if (bmp.compress(Bitmap.CompressFormat.PNG, 100, os)) restoreUri = ShareProvider.uri(ShareProvider.CAMERA, name);
+        } catch (Exception e) {
+            Ui.warn("could not keep a copy for restore:", e);
+        }
+    }
+
+    /** The photo could not be opened: a clear card instead of an empty screen. */
+    private void showError() {
+        countView.setScanning(false);
+        countingPill.setVisibility(View.GONE);
+        topArea.setVisibility(View.GONE);
+        shareButton.setVisibility(View.GONE);
+        Context c = app;
+        Glass.Panel card = panel(c, 26);
+        LinearLayout col = Ui.column(c);
+        col.setGravity(Gravity.CENTER_HORIZONTAL);
+        col.setPadding(Ui.dp(24), Ui.dp(24), Ui.dp(24), Ui.dp(20));
+        col.addView(Ui.icon(c, "alert", Ui.ACCENT, 40), new LinearLayout.LayoutParams(Ui.dp(40), Ui.dp(40)));
+        TextView title = Ui.text(c, "Couldn't open this photo", 20, Ui.BOLD, Color.WHITE);
+        LinearLayout.LayoutParams tp = Ui.wrap();
+        tp.topMargin = Ui.dp(14);
+        col.addView(title, tp);
+        TextView body = Ui.text(c, "It may be damaged, too large, or no longer available. Try another photo.", 14,
+                Ui.REGULAR, Color.argb(190, 255, 255, 255));
+        body.setGravity(Gravity.CENTER);
+        body.setLineSpacing(Ui.dp(2), 1f);
+        LinearLayout.LayoutParams bp = Ui.matchWidth();
+        bp.topMargin = Ui.dp(8);
+        col.addView(body, bp);
+        LinearLayout pick = Ui.filledButton(c, "Choose another photo", "photos", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                app.goBack();
+                app.pickImage();
+            }
+        });
+        LinearLayout.LayoutParams kp = Ui.matchWidth();
+        kp.topMargin = Ui.dp(20);
+        col.addView(pick, kp);
+        card.addView(col);
+        FrameLayout.LayoutParams lp = Ui.frame(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        lp.leftMargin = Ui.dp(28);
+        lp.rightMargin = Ui.dp(28);
+        root.addView(card, lp);
+        card.setAlpha(0f);
+        card.setScaleX(0.94f);
+        card.setScaleY(0.94f);
+        card.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(450).setInterpolator(Ui.SPRING).start();
     }
 
     private void show(Bitmap bmp, DalCounter.Result res) {
@@ -628,7 +690,7 @@ final class ResultScreen extends MainActivity.Screen {
     @Override
     void save(Bundle out) {
         if (result == null || !countView.hasData()) return;
-        out.putString("src", uri.toString());
+        out.putString("src", (restoreUri != null ? restoreUri : uri).toString());
         out.putFloatArray("mk", countView.exportMarkers());
         out.putString("hid", historyId);
     }

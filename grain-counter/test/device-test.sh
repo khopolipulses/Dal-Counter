@@ -38,8 +38,7 @@ no_crash() {
 
 # Taps the centre of the first on-screen element whose text or description matches (regex).
 tap_text() {
-  sh_ uiautomator dump /sdcard/ui.xml > /dev/null
-  adb pull /sdcard/ui.xml "$OUT/ui.xml" > /dev/null 2>&1
+  dump
   python3 - "$OUT/ui.xml" "$1" <<'PY'
 import re, sys, xml.etree.ElementTree as ET
 root = ET.parse(sys.argv[1]).getroot()
@@ -62,11 +61,31 @@ tap() {
   return 1
 }
 
+dump() { # uiautomator sometimes returns an empty tree while the screen animates: retry
+  for i in 1 2 3 4; do
+    if sh_ uiautomator dump /sdcard/ui.xml 2>&1 | grep -q "dumped to"; then
+      adb pull /sdcard/ui.xml "$OUT/ui.xml" > /dev/null 2>&1
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 screen_has() {
-  sh_ uiautomator dump /sdcard/ui.xml > /dev/null
-  adb pull /sdcard/ui.xml "$OUT/ui.xml" > /dev/null 2>&1
+  dump
   grep -Eq "$1" "$OUT/ui.xml"
 }
+
+# The big number on the result screen (the only text that is just digits).
+shown_count() {
+  dump
+  grep -Eo 'text="[0-9]+"' "$OUT/ui.xml" | head -1 | grep -Eo '[0-9]+'
+}
+
+app_log() { adb logcat -d -s GrainCounter | tr -d '\r'; }
+
+resumed() { sh_ dumpsys activity activities | grep -E "ResumedActivity" | head -1; }
 
 media_uri() { # content Uri of a picture pushed to /sdcard/Pictures
   sh_ content query --uri content://media/external/images/media --projection _id:_display_name \
@@ -88,20 +107,24 @@ shot 01_home
 alive && ok "home screen shows" || bad "app not running after launch"
 screen_has "Take Photo" && ok "Take Photo button present" || bad "Take Photo missing"
 
-say "share a photo into the app (lentils + printed text)"
-for f in "$DATA"/*.jpg; do adb push "$f" /sdcard/Pictures/ > /dev/null; done
+say "open a photo with the system photo picker, as a user does (lentils + printed text, 100 grains)"
+adb push "$DATA/lentils_with_print.jpg" /sdcard/Pictures/ > /dev/null
 sh_ content call --uri content://media --method scan_volume --arg external_primary > /dev/null 2>&1
 sleep 3
-URI=$(media_uri lentils_with_print.jpg)
-echo "  uri: $URI"
-sh_ am start -W -a android.intent.action.SEND -t image/jpeg --eu android.intent.extra.STREAM "$URI" \
-  --grant-read-uri-permission -n $PKG/.MainActivity > /dev/null
-sleep 9
-shot 02_result
-if screen_has 'grains'; then ok "count shown"; else bad "no count after sharing a photo"; fi
-grep -Eo 'text="[0-9]+"' "$OUT/ui.xml" | head -1 | sed 's/^/  count: /'
-screen_has 'print marks ignored' && ok "printed marks reported as ignored" || bad "print marks not reported"
-no_crash share
+adb logcat -c
+tap 'Choose from Photos' && sleep 5
+shot 02a_picker
+if tap '^Photo' || tap 'lentils_with_print'; then
+  sleep 10
+  shot 02_result
+  N=$(shown_count)
+  echo "  count: $N (100 grains in the photo)"
+  if [ -n "$N" ] && [ "$N" -ge 95 ] && [ "$N" -le 110 ]; then ok "photo from the picker counted"; else bad "picker photo not counted"; app_log; fi
+  screen_has 'print marks ignored' && ok "printed marks reported as ignored" || bad "print marks not reported"
+else
+  bad "could not pick a photo in the system picker"
+fi
+no_crash picker
 
 say "guided review"
 if tap 'Review [0-9]+' || tap '[0-9]+ to check'; then
@@ -126,24 +149,27 @@ sleep 3
 alive && ok "still in the app after Back" || bad "Back closed the app"
 screen_has 'Take Photo' && ok "Back returned to Home" || bad "Back did not return to Home"
 shot 05_home_recent
-screen_has 'grains' && ok "count kept in Recent" || bad "count not in Recent"
+screen_has 'text="[0-9]+ grains"' && ok "count kept in Recent" || bad "count not in Recent"
 
 say "history"
 tap 'See All' && sleep 2
 shot 06_history
 screen_has 'History' && ok "history list" || bad "history did not open"
-tap '[0-9]+ grains' && sleep 3
-shot 07_picture
-alive && ok "saved picture opens" || bad "picture screen crashed"
-adb shell input keyevent KEYCODE_BACK; sleep 1
+if tap '^[0-9]+ grains$'; then
+  sleep 3
+  shot 07_picture
+  alive && ok "saved picture opens" || bad "picture screen crashed"
+  adb shell input keyevent KEYCODE_BACK; sleep 2
+fi
 adb shell input keyevent KEYCODE_BACK; sleep 2
 screen_has 'Take Photo' && ok "back to home" || bad "navigation stack broken"
 no_crash history
 
 say "camera (the app's own Camera2 screen)"
-tap 'Take Photo' && sleep 4
+tap 'Take Photo' && sleep 5
 shot 08_camera
-if tap 'Take photo'; then
+echo "  resumed: $(resumed)"
+if resumed | grep -q CameraActivity && tap 'Take photo'; then
   sleep 9
   shot 09_camera_result
   alive && ok "photo taken and counted" || bad "camera flow crashed"
@@ -154,15 +180,27 @@ else
 fi
 no_crash camera
 
-say "dark mode + mixed grains with glare"
+say "dark mode + mixed grains with glare (60 grains), shared into the app from another app"
 sh_ cmd uimode night yes
 sleep 3
+adb push "$DATA/mixed_with_glare.jpg" /sdcard/Pictures/ > /dev/null
+sh_ content call --uri content://media --method scan_volume --arg external_primary > /dev/null 2>&1
+sleep 3
 URI2=$(media_uri mixed_with_glare.jpg)
-sh_ am start -W -a android.intent.action.SEND -t image/jpeg --eu android.intent.extra.STREAM "$URI2" \
-  --grant-read-uri-permission -n $PKG/.MainActivity > /dev/null
-sleep 9
+adb logcat -c
+# "Share to Grain Counter" path. The shell can only pass on access it has itself.
+if sh_ content read --uri "$URI2" > /dev/null 2>&1; then
+  sh_ am start -W -a android.intent.action.SEND -t image/jpeg --eu android.intent.extra.STREAM "$URI2" \
+    --grant-read-uri-permission -n $PKG/.MainActivity > /dev/null
+else
+  echo "  (the shell cannot read media here, so it cannot share; opening through the picker instead)"
+  tap 'Choose from Photos' && sleep 5 && tap '^Photo'
+fi
+sleep 10
 shot 10_dark_result
-screen_has 'text="60"' && ok "mixed photo with glare counted 60 (exact)" || bad "mixed photo not counted 60"
+N=$(shown_count)
+echo "  count: $N"
+[ "$N" = "60" ] && ok "mixed grains with glare counted 60 (exact)" || { bad "mixed photo counted '$N', not 60"; app_log; }
 adb shell input keyevent KEYCODE_BACK; sleep 2
 shot 11_dark_home
 no_crash dark
@@ -180,9 +218,9 @@ say "security: hostile intents"
 # 1. a file:// Uri into the app's own private files must never be opened
 sh_ am start -W -a android.intent.action.SEND -t image/jpeg \
   --eu android.intent.extra.STREAM "file:///data/data/$PKG/files/history/index.json" -n $PKG/.MainActivity > /dev/null
-sleep 1 # the refusal message is shown for about 2.5 s
+sleep 2
 shot 13_file_uri_refused
-if screen_has 'cannot be opened'; then ok "file:// Uri refused"; else bad "file:// Uri was not refused"; fi
+if app_log | grep -q "refused shared Uri with scheme file"; then ok "file:// Uri into private files refused"; else bad "file:// Uri was not refused"; fi
 # 2. junk: no stream, wrong type, bogus content Uri
 sh_ am start -W -a android.intent.action.SEND -t image/jpeg -n $PKG/.MainActivity > /dev/null
 sh_ am start -W -a android.intent.action.SEND -t text/plain --es android.intent.extra.TEXT hello -n $PKG/.MainActivity > /dev/null
@@ -201,7 +239,9 @@ for u in "content://com.dalcounter.files/share/x.png" "content://com.dalcounter.
   fi
 done
 # 4. CameraActivity is not exported
-if sh_ am start -n $PKG/.CameraActivity 2>&1 | grep -Eqi "not exported|security|permission denial|error"; then
+CAM=$(sh_ am start -W -n $PKG/.CameraActivity 2>&1)
+echo "$CAM" | sed 's/^/  am: /' | head -4
+if echo "$CAM" | grep -Eqi "not exported|security|permission denial|error"; then
   ok "camera screen not reachable from other apps"
 else
   bad "camera screen is exported"
@@ -224,9 +264,10 @@ no_crash monkey
 shot 14_after_monkey
 
 say "process death: the app is killed in the background and comes back"
-sh_ am start -W -a android.intent.action.SEND -t image/jpeg --eu android.intent.extra.STREAM "$URI" \
-  --grant-read-uri-permission -n $PKG/.MainActivity > /dev/null
-sleep 8
+sh_ am start -W -n $PKG/.MainActivity > /dev/null
+sleep 2
+tap 'Choose from Photos' && sleep 5 && tap '^Photo' && sleep 10
+shot 15a_before_kill
 adb shell input keyevent KEYCODE_HOME; sleep 2
 sh_ am kill $PKG
 sleep 2
@@ -234,8 +275,11 @@ sh_ am start -W -n $PKG/.MainActivity > /dev/null
 sleep 8
 shot 15_after_process_death
 alive && ok "restored after process death" || bad "did not come back after process death"
+N=$(shown_count)
+[ -n "$N" ] && ok "count screen restored ($N grains)" || bad "count screen not restored after process death"
 no_crash process-death
 
 adb logcat -d > "$OUT/logcat.txt"
+app_log > "$OUT/app-log.txt"
 echo
 if [ "$FAILS" -eq 0 ]; then echo "DEVICE TEST: ALL PASSED"; else echo "DEVICE TEST: $FAILS FAILED"; exit 1; fi

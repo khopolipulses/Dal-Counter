@@ -24,7 +24,7 @@ choose your team under *Signing & Capabilities*, plug in the phone and press Run
   not split just because it is bigger than the others).
 - **Light reflections** (flash, lamp or window glare on a glossy white table) are ignored.
 - Blue ring = counted, **orange** = worth a check, **green** = added by you, blue with a tick = checked by you.
-- Tap an empty spot to add a missed grain, tap a ring to remove one. **Undo** reverts. Pinch or double tap to zoom. Pinch to zoom, drag to pan, **Fit** resets.
+- Tap an empty spot to add a missed grain, tap a ring to remove one. **Undo** reverts. Pinch or double tap to zoom, drag to pan, **Fit** resets.
 - The pill under the count says *Looks exact*, *N to check* or *Checked by you*; a tip appears when the photo itself could be better.
 - **History** keeps every count on the phone (thumbnail, number, date); open one to zoom, share or delete it.
 - **Save** adds the numbered PNG to Photos, **Share** sends it anywhere.
@@ -45,6 +45,19 @@ spread them out when you need the last grain.
 Apple-style: large titles, frosted glass cards and toolbars over a softly drifting warm background, the photo full screen
 under floating glass controls, spring animations (markers pop in, the count counts up, review glides from grain to grain),
 haptics, light and dark mode. Native blur materials and SF Symbols; Reduce Motion is respected.
+
+## Privacy and security
+- No network code: counting happens entirely on the phone. The camera is asked for only when **Take Photo** is used;
+  photos are picked with the system picker (no photo-library permission). Adding to Photos asks for add-only access.
+- History is stored with iOS data protection and excluded from iCloud and computer backups; shared pictures are
+  temporary files cleared at the next launch. `PrivacyInfo.xcprivacy` declares no tracking and no collected data.
+
+## Testing (runs in CI on every push)
+- `swift test`: marker list, robustness, reflections, mixed grains, print removal and a 300-image fuzz.
+- Java/Swift parity: the fuzz results must be bit-identical to the Android engine's.
+- UI tests on the simulator (`UITests/`): home, counting a test photo, guided review, History, dark mode with mixed
+  grains and glare, rotation, and Apple's accessibility audit on each screen. Screenshots are uploaded as
+  `ios-simulator-screenshots`. (A Debug-only launch argument opens the test photo; it is not in release builds.)
 
 ## Code
 - `Core/` - `DalCounter.swift` (counting engine) and `Markers.swift` (edit list). Plain Swift, no UIKit:
