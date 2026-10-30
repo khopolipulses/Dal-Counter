@@ -256,9 +256,10 @@ if sh_ dumpsys package $PKG | grep -q "android.permission.INTERNET"; then bad "a
 say "stress: 4000 random events"
 sh_ am start -W -n $PKG/.MainActivity > /dev/null
 adb logcat -c -b crash
-MONKEY=$(sh_ monkey -p $PKG --pct-syskeys 0 --pct-appswitch 5 --throttle 25 -s 4242 -v 4000 2>&1)
+MONKEY=$(sh_ monkey -p $PKG --pct-syskeys 0 --pct-flip 0 --pct-appswitch 5 --throttle 25 -s 4242 -v 4000 2>&1)
 echo "$MONKEY" | tail -3
-if echo "$MONKEY" | grep -Eq "CRASH|ANR|Exception"; then
+# Only the app's failures count (monkey's own device errors, e.g. keyboard 'flip' access, are not the app's).
+if echo "$MONKEY" | grep -Eq "// CRASH:|// NOT RESPONDING|ANR in $PKG|Monkey aborted"; then
   bad "monkey found a crash or ANR"
   echo "$MONKEY" > "$OUT/monkey.txt"
 else

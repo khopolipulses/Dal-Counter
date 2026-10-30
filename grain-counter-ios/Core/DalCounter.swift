@@ -62,6 +62,10 @@ public enum DalCounter {
                     + "Use a plainer, contrasting background (dark for light grains, white for dark grains)."
             }
             if noise > 0.08 { return "The photo is dark or grainy. Use more light for a safer count." }
+            if count >= 30 && uncertainCount * 2 > count {
+                return "Most marks are unclear, so this may not be a photo of separate grains. "
+                    + "Spread the grains on one plain background and take the photo from above."
+            }
             if uncertainCount > 0 {
                 return "\(uncertainCount) grains touch or overlap (shown in orange). Check them, "
                     + "or spread the grains out for an exact count."

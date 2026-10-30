@@ -118,6 +118,14 @@ final class HistoryDetailViewController: UIViewController, UIScrollViewDelegate 
         view.backgroundColor = Theme.canvas
         title = entry.count == 1 ? "1 grain" : "\(entry.count) grains"
         navigationItem.largeTitleDisplayMode = .never
+        // This screen is dark (a photo), so its bar is too: dark glass, white title, whatever the system mode.
+        let bar = UINavigationBarAppearance()
+        bar.configureWithDefaultBackground()
+        bar.backgroundEffect = UIBlurEffect(style: .systemThinMaterialDark)
+        bar.titleTextAttributes = [.foregroundColor: UIColor.white]
+        navigationItem.standardAppearance = bar
+        navigationItem.scrollEdgeAppearance = bar
+        navigationItem.compactAppearance = bar
         let share = UIBarButtonItem(barButtonSystemItem: .action, target: self, action: #selector(sharePicture))
         let delete = UIBarButtonItem(barButtonSystemItem: .trash, target: self, action: #selector(confirmDelete))
         navigationItem.rightBarButtonItems = [share, delete]
